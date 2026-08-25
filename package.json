@@ -17,6 +17,8 @@
     "desktop:smoke": "node electron/smoke-test.mjs",
     "dist:mac": "npm run build && electron-builder --mac dmg --universal --publish never",
     "dist:win": "npm run build && electron-builder --win nsis --x64 --publish never",
+    "release:mac": "npm run build && electron-builder --mac dmg --universal --publish never -c.forceCodeSigning=true",
+    "release:win": "npm run build && electron-builder --win nsis --x64 --publish never -c.forceCodeSigning=true",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate"
   },
@@ -35,6 +37,8 @@
     "asar": true,
     "mac": {
       "category": "public.app-category.video",
+      "hardenedRuntime": true,
+      "notarize": true,
       "target": [
         {
           "target": "dmg",

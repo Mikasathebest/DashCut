@@ -38,9 +38,9 @@ npm run desktop
 - 在 macOS 环境构建同时支持 Apple Silicon 与 Intel Mac 的通用 `.dmg`
 - 创建对应 GitHub Release，并附加两个安装包与自动生成的版本说明
 
-也可以在 GitHub Actions 页面手动运行 **Build desktop installers** 工作流验证安装包。
+也可以在 GitHub Actions 页面手动运行 **Build signed desktop installers** 工作流验证安装包。
 
-当前默认生成未签名安装包。正式公开分发时，建议配置 Windows 代码签名证书和 Apple Developer ID / notarization，避免系统安全警告。
+Release 构建要求 Windows Authenticode 与 Apple Developer ID 签名，并自动完成 Apple notarization；缺少任何证书或公证材料时发布会直接失败。首次配置参见 [`docs/CODE_SIGNING.md`](docs/CODE_SIGNING.md)。
 
 ## 验证
 
