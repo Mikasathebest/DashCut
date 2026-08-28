@@ -15,10 +15,11 @@
     "test": "npm run build && node --test tests/rendered-html.test.mjs",
     "desktop": "npm run build && electron .",
     "desktop:smoke": "node electron/smoke-test.mjs",
-    "dist:mac": "npm run build && electron-builder --mac dmg --universal --publish never",
-    "dist:win": "npm run build && electron-builder --win nsis --x64 --publish never",
-    "release:mac": "npm run build && electron-builder --mac dmg --universal --publish never -c.forceCodeSigning=true",
-    "release:win": "npm run build && electron-builder --win nsis --x64 --publish never -c.forceCodeSigning=true",
+    "runtime:build": "node scripts/build-local-runtime.mjs",
+    "dist:mac": "npm run runtime:build && npm run build && electron-builder --mac dmg --publish never",
+    "dist:win": "npm run runtime:build && npm run build && electron-builder --win nsis --x64 --publish never",
+    "release:mac": "npm run runtime:build && npm run build && electron-builder --mac dmg --publish never -c.forceCodeSigning=true",
+    "release:win": "npm run runtime:build && npm run build && electron-builder --win nsis --x64 --publish never -c.forceCodeSigning=true",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate"
   },
@@ -33,6 +34,18 @@
       "electron/**/*",
       "dist/**/*",
       "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "local-engine",
+        "to": "local-engine",
+        "filter": ["**/*"]
+      },
+      {
+        "from": "local-runtime",
+        "to": "local-runtime",
+        "filter": ["dashcat-transcribe/**/*"]
+      }
     ],
     "asar": true,
     "mac": {

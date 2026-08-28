@@ -1,8 +1,37 @@
-const { app, BrowserWindow, shell } = require("electron");
+/* eslint-disable @typescript-eslint/no-require-imports */
+const { app, BrowserWindow, ipcMain, shell } = require("electron");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
+const { getHardwareProfile } = require("./hardware.cjs");
+const { transcribeLocal } = require("./local-transcription.cjs");
+const { getModels, getRuntimeStatus, installModel, removeModel } = require("./model-manager.cjs");
 
 let desktopServer;
+
+function localAiOptions() {
+  const executable = process.platform === "win32" ? "dashcat-transcribe.exe" : "dashcat-transcribe";
+  return {
+    isPackaged: app.isPackaged,
+    modelsPath: path.join(app.getPath("userData"), "models"),
+    bundledRunnerPath: app.isPackaged
+      ? path.join(process.resourcesPath, "local-runtime", "dashcat-transcribe", executable)
+      : path.join(__dirname, "..", "local-runtime", "dashcat-transcribe", executable),
+    devRunnerPath: path.join(__dirname, "..", "local-engine", "transcribe.py"),
+  };
+}
+
+ipcMain.handle("hardware:get-profile", async () => {
+  const options = localAiOptions();
+  const runtime = await getRuntimeStatus(options);
+  return getHardwareProfile(app.getPath("userData"), runtime);
+});
+ipcMain.handle("models:list", () => getModels(localAiOptions()));
+ipcMain.handle("models:install", (_event, model) => installModel(model, localAiOptions()));
+ipcMain.handle("models:remove", (_event, model) => removeModel(model, localAiOptions()));
+ipcMain.handle("transcription:local", (_event, request) => {
+  const options = localAiOptions();
+  return transcribeLocal(request, { ...options, getRuntimeStatus: () => getRuntimeStatus(options) });
+});
 
 async function createWindow() {
   const { startAppServer } = await import(pathToFileURL(path.join(__dirname, "server.mjs")).href);
