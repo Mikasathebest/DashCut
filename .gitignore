@@ -36,9 +36,13 @@ yarn-error.log*
 
 # typescript
 next-env.d.ts
+*.tsbuildinfo
 /dist/
 /.electron-cache/
 /release/
+/.pyinstaller/
+/local-runtime/dashcat-transcribe/
+/.runtime-venv/
 /.wrangler/
 /outputs/
 /work/

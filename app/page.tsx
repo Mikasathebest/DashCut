@@ -2,16 +2,31 @@
 
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 
-type Segment = { id: number; start: number; end: number; color: string };
+type MediaClip = { id: number; name: string; url: string; sourcePath: string; duration: number; color: string; isDemo?: boolean };
+type Segment = { id: number; clipId: number; sourceStart: number; sourceEnd: number };
+type TimelineSegment = Segment & { timelineStart: number; timelineEnd: number; clip: MediaClip };
 type Subtitle = { id: number; start: number; end: number; zh: string; en: string };
 type Panel = "media" | "audio" | "text" | "subtitles" | "cover" | "effects";
+type RecognitionEngine = "cloud" | "local";
+type SubtitleStyle = {
+  fontFamily: string;
+  fontSize: number;
+  color: string;
+  outlineColor: string;
+  outlineWidth: number;
+  backgroundOpacity: number;
+};
 
-const demoSubtitles: Subtitle[] = [
-  { id: 1, start: 0, end: 3.2, zh: "欢迎来到今天的视频", en: "Welcome to today’s video" },
-  { id: 2, start: 3.2, end: 7.1, zh: "我们来聊聊如何让创作更简单", en: "Let’s make video creation feel effortless" },
-  { id: 3, start: 7.1, end: 11.6, zh: "从剪辑到字幕，一次完成", en: "From editing to captions, all in one place" },
-  { id: 4, start: 11.6, end: 15.8, zh: "准备好了吗？我们开始吧", en: "Ready? Let’s get started" },
-];
+const clipColors = ["#5c82ff", "#78a1ff", "#6d8df5", "#86a8ff", "#6fc2b5", "#a47ce9"];
+
+const defaultSubtitleStyle: SubtitleStyle = {
+  fontFamily: 'Arial, "PingFang SC", "Microsoft YaHei", sans-serif',
+  fontSize: 34,
+  color: "#ffffff",
+  outlineColor: "#111111",
+  outlineWidth: 2,
+  backgroundOpacity: 35,
+};
 
 const panelLabels: Record<Panel, string> = {
   media: "媒体", audio: "音频", text: "文本", subtitles: "字幕", cover: "封面", effects: "特效",
@@ -25,25 +40,36 @@ function formatTime(value: number) {
   return `${String(min).padStart(2, "0")}:${String(sec).padStart(2, "0")}:${String(frames).padStart(2, "0")}`;
 }
 
+function readVideoDuration(file: File) {
+  return new Promise<number>((resolve) => {
+    const url = URL.createObjectURL(file);
+    const probe = document.createElement("video");
+    probe.preload = "metadata";
+    probe.onloadedmetadata = () => {
+      const value = Number.isFinite(probe.duration) ? probe.duration : 0;
+      URL.revokeObjectURL(url);
+      resolve(value);
+    };
+    probe.onerror = () => {
+      URL.revokeObjectURL(url);
+      resolve(0);
+    };
+    probe.src = url;
+  });
+}
+
 export default function Home() {
   const [panel, setPanel] = useState<Panel>("subtitles");
-  const [videoUrl, setVideoUrl] = useState("");
-  const [videoName, setVideoName] = useState("城市漫游_最终版.mp4");
-  const [musicName, setMusicName] = useState("日落之后 · Lo-fi Mix");
-  const [duration, setDuration] = useState(62.4);
-  const [current, setCurrent] = useState(12.24);
+  const [clips, setClips] = useState<MediaClip[]>([]);
+  const [musicName, setMusicName] = useState("");
+  const [current, setCurrent] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [muted, setMuted] = useState(false);
   const [ratio, setRatio] = useState("16:9");
   const [subtitleMode, setSubtitleMode] = useState<"zh" | "en" | "both">("both");
-  const [subtitles, setSubtitles] = useState<Subtitle[]>(demoSubtitles);
-  const [segments, setSegments] = useState<Segment[]>([
-    { id: 1, start: 0, end: 17.8, color: "#5c82ff" },
-    { id: 2, start: 17.8, end: 34.2, color: "#78a1ff" },
-    { id: 3, start: 34.2, end: 48.7, color: "#6d8df5" },
-    { id: 4, start: 48.7, end: 62.4, color: "#86a8ff" },
-  ]);
-  const [selectedSegment, setSelectedSegment] = useState(1);
+  const [subtitles, setSubtitles] = useState<Subtitle[]>([]);
+  const [segments, setSegments] = useState<Segment[]>([]);
+  const [selectedSegment, setSelectedSegment] = useState(0);
   const [isGenerating, setIsGenerating] = useState(false);
   const [coverOpen, setCoverOpen] = useState(false);
   const [coverTitle, setCoverTitle] = useState("独自旅行的 48 小时");
@@ -54,21 +80,49 @@ export default function Home() {
   const [exporting, setExporting] = useState(false);
   const [progress, setProgress] = useState(0);
   const [toast, setToast] = useState("");
+  const [subtitleStyle, setSubtitleStyle] = useState<SubtitleStyle>(defaultSubtitleStyle);
+  const [styleOpen, setStyleOpen] = useState(false);
+  const [recognitionEngine, setRecognitionEngine] = useState<RecognitionEngine>("cloud");
+  const [hardwareOpen, setHardwareOpen] = useState(false);
+  const [hardware, setHardware] = useState<HardwareProfile | null>(null);
+  const [checkingHardware, setCheckingHardware] = useState(false);
+  const [localModels, setLocalModels] = useState<LocalModelInfo[]>([]);
+  const [selectedModel, setSelectedModel] = useState<LocalModelInfo["id"]>("small");
+  const [installingModel, setInstallingModel] = useState<string>("");
   const videoRef = useRef<HTMLVideoElement>(null);
   const videoInputRef = useRef<HTMLInputElement>(null);
   const musicInputRef = useRef<HTMLInputElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
+  const timelineSegments = useMemo<TimelineSegment[]>(() => {
+    let cursor = 0;
+    return segments.flatMap((segment) => {
+      const clip = clips.find((item) => item.id === segment.clipId);
+      if (!clip) return [];
+      const item = { ...segment, timelineStart: cursor, timelineEnd: cursor + segment.sourceEnd - segment.sourceStart, clip };
+      cursor = item.timelineEnd;
+      return [item];
+    });
+  }, [clips, segments]);
+  const duration = timelineSegments.at(-1)?.timelineEnd ?? 0;
+  const activeTimelineSegment = useMemo(
+    () => timelineSegments.find((segment) => current >= segment.timelineStart && current < segment.timelineEnd) ?? timelineSegments.at(-1),
+    [current, timelineSegments],
+  );
+  const videoUrl = activeTimelineSegment?.clip.url ?? "";
+
   const activeSubtitle = useMemo(
-    () => subtitles.find((item) => current >= item.start && current < item.end) ?? subtitles[2],
+    () => subtitles.find((item) => current >= item.start && current < item.end),
     [current, subtitles],
   );
 
   useEffect(() => {
-    if (!videoUrl || !videoRef.current) return;
+    if (!videoUrl || !videoRef.current || !activeTimelineSegment) return;
+    const localTime = activeTimelineSegment.sourceStart + current - activeTimelineSegment.timelineStart;
+    if (Math.abs(videoRef.current.currentTime - localTime) > 0.35) videoRef.current.currentTime = localTime;
     if (playing) videoRef.current.play().catch(() => setPlaying(false));
     else videoRef.current.pause();
-  }, [playing, videoUrl]);
+  }, [activeTimelineSegment, current, playing, videoUrl]);
 
   useEffect(() => {
     if (!toast) return;
@@ -76,15 +130,29 @@ export default function Home() {
     return () => window.clearTimeout(id);
   }, [toast]);
 
-  function importVideo(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    if (videoUrl) URL.revokeObjectURL(videoUrl);
-    setVideoUrl(URL.createObjectURL(file));
-    setVideoName(file.name);
+  async function importVideo(event: ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.target.files ?? []);
+    if (!files.length) return;
+    const baseId = Math.max(0, ...clips.filter((clip) => !clip.isDemo).map((clip) => clip.id));
+    const imported = await Promise.all(files.map(async (file, index): Promise<MediaClip> => ({
+      id: baseId + index + 1,
+      name: file.name,
+      url: URL.createObjectURL(file),
+      sourcePath: window.frameFlowDesktop?.getFilePath(file) ?? "",
+      duration: await readVideoDuration(file),
+      color: clipColors[(baseId + index) % clipColors.length],
+    })));
+    const valid = imported.filter((clip) => clip.duration > 0);
+    if (!valid.length) return setToast("无法读取所选视频");
+    const nextClips = [...clips, ...valid];
+    const nextSegments = valid.map((clip) => ({ id: clip.id * 1000, clipId: clip.id, sourceStart: 0, sourceEnd: clip.duration }));
+    setClips(nextClips);
+    setSegments((items) => [...items, ...nextSegments]);
+    setSelectedSegment(nextSegments[0].id);
     setCurrent(0);
     setPlaying(false);
-    setToast("视频已导入时间轴");
+    event.target.value = "";
+    setToast(`已导入 ${valid.length} 个视频片段`);
   }
 
   function importMusic(event: ChangeEvent<HTMLInputElement>) {
@@ -96,16 +164,18 @@ export default function Home() {
   }
 
   function splitClip() {
-    const index = segments.findIndex((segment) => current > segment.start + 0.3 && current < segment.end - 0.3);
+    const targetLayout = timelineSegments.find((segment) => current > segment.timelineStart + 0.3 && current < segment.timelineEnd - 0.3);
+    const index = targetLayout ? segments.findIndex((segment) => segment.id === targetLayout.id) : -1;
     if (index === -1) {
       setToast("请把播放头移到片段中间");
       return;
     }
     const target = segments[index];
     const nextId = Math.max(...segments.map((segment) => segment.id)) + 1;
+    const sourceTime = target.sourceStart + current - targetLayout!.timelineStart;
     const replacement = [
-      { ...target, end: current },
-      { id: nextId, start: current, end: target.end, color: "#91adff" },
+      { ...target, sourceEnd: sourceTime },
+      { id: nextId, clipId: target.clipId, sourceStart: sourceTime, sourceEnd: target.sourceEnd },
     ];
     setSegments([...segments.slice(0, index), ...replacement, ...segments.slice(index + 1)]);
     setSelectedSegment(nextId);
@@ -114,26 +184,129 @@ export default function Home() {
 
   function removeClip() {
     if (segments.length <= 1) return setToast("至少保留一个视频片段");
-    const selected = segments.find((segment) => segment.id === selectedSegment);
+    const selected = timelineSegments.find((segment) => segment.id === selectedSegment);
     setSegments(segments.filter((segment) => segment.id !== selectedSegment));
     setSelectedSegment(segments.find((segment) => segment.id !== selectedSegment)?.id ?? 1);
-    setToast(selected ? `已移除 ${formatTime(selected.start)} 的片段` : "片段已移除");
+    setToast(selected ? `已移除 ${formatTime(selected.timelineStart)} 的片段` : "片段已移除");
   }
 
   function seekFromPointer(event: React.PointerEvent<HTMLDivElement>) {
     const rect = event.currentTarget.getBoundingClientRect();
     const next = Math.max(0, Math.min(duration, ((event.clientX - rect.left) / rect.width) * duration));
     setCurrent(next);
-    if (videoRef.current) videoRef.current.currentTime = next;
+    const target = timelineSegments.find((segment) => next >= segment.timelineStart && next < segment.timelineEnd) ?? timelineSegments.at(-1);
+    if (videoRef.current && target) videoRef.current.currentTime = target.sourceStart + next - target.timelineStart;
   }
 
-  function generateSubtitles() {
-    setIsGenerating(true);
-    window.setTimeout(() => {
-      setSubtitles(demoSubtitles);
-      setIsGenerating(false);
-      setToast("字幕识别完成，准确率 96%");
-    }, 1400);
+  async function generateSubtitles() {
+    if (recognitionEngine === "local") {
+      if (!window.frameFlowDesktop) {
+        setToast("本地识别仅支持桌面版");
+        setHardwareOpen(true);
+        return;
+      }
+      if (!hardware?.runtime?.ready) {
+        setToast("本地 AI 运行时不可用，请重新安装 DashCat");
+        setHardwareOpen(true);
+        void checkHardware();
+        return;
+      }
+      if (!localModels.find((model) => model.id === selectedModel)?.installed) {
+        setToast(`请先下载安装 ${selectedModel} 模型`);
+        setHardwareOpen(true);
+        return;
+      }
+      const sourceClips = clips.filter((clip) => !clip.isDemo && clip.sourcePath);
+      if (!sourceClips.length) return setToast("请先导入本地视频");
+      setIsGenerating(true);
+      try {
+        const useCuda = Boolean(hardware.gpus.some((gpu) => gpu.fasterWhisperAcceleration) && Number(hardware.runtime.info?.cudaDeviceCount) > 0);
+        const response = await window.frameFlowDesktop.transcribeLocal({
+          clips: sourceClips.map((clip) => ({ id: clip.id, path: clip.sourcePath })),
+          model: selectedModel,
+          device: useCuda ? "cuda" : "cpu",
+          computeType: hardware.assessment.computeType,
+        });
+        let nextId = 1;
+        const generated: Subtitle[] = [];
+        for (const result of response.results) {
+          for (const timeline of timelineSegments.filter((segment) => segment.clipId === result.clipId)) {
+            for (const caption of result.segments) {
+              const sourceStart = Math.max(caption.start, timeline.sourceStart);
+              const sourceEnd = Math.min(caption.end, timeline.sourceEnd);
+              if (sourceEnd <= sourceStart) continue;
+              const isChinese = result.language.toLowerCase().startsWith("zh");
+              generated.push({
+                id: nextId++,
+                start: timeline.timelineStart + sourceStart - timeline.sourceStart,
+                end: timeline.timelineStart + sourceEnd - timeline.sourceStart,
+                zh: isChinese ? caption.text : "",
+                en: isChinese ? "" : caption.text,
+              });
+            }
+          }
+        }
+        generated.sort((a, b) => a.start - b.start);
+        setSubtitles(generated);
+        setToast(`本地识别完成 · ${response.model} / ${response.device}`);
+      } catch (error) {
+        setToast(error instanceof Error ? error.message : "本地识别失败");
+      } finally {
+        setIsGenerating(false);
+      }
+      return;
+    }
+    setToast("云端识别服务尚未配置，请选择本地模型");
+  }
+
+  async function checkHardware() {
+    setHardwareOpen(true);
+    if (!window.frameFlowDesktop) {
+      setHardware(null);
+      return;
+    }
+    setCheckingHardware(true);
+    try {
+      const [profile, models] = await Promise.all([
+        window.frameFlowDesktop.getHardwareProfile(),
+        window.frameFlowDesktop.getLocalModels(),
+      ]);
+      setHardware(profile);
+      setLocalModels(models);
+      if (["small", "medium", "turbo", "large-v3"].includes(profile.assessment.model)) {
+        setSelectedModel(profile.assessment.model as LocalModelInfo["id"]);
+      }
+    } catch {
+      setToast("硬件检测失败，请重新启动桌面应用");
+    } finally {
+      setCheckingHardware(false);
+    }
+  }
+
+  async function installLocalModel(model: LocalModelInfo["id"]) {
+    if (!window.frameFlowDesktop) return;
+    setInstallingModel(model);
+    try {
+      await window.frameFlowDesktop.installLocalModel(model);
+      setLocalModels(await window.frameFlowDesktop.getLocalModels());
+      setSelectedModel(model);
+      setToast(`${model} 模型安装完成`);
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : `${model} 模型安装失败`);
+    } finally {
+      setInstallingModel("");
+    }
+  }
+
+  async function removeLocalModel(model: LocalModelInfo["id"]) {
+    if (!window.frameFlowDesktop) return;
+    await window.frameFlowDesktop.removeLocalModel(model);
+    setLocalModels(await window.frameFlowDesktop.getLocalModels());
+    setToast(`${model} 模型已删除`);
+  }
+
+  function updateSubtitleStyle<K extends keyof SubtitleStyle>(key: K, value: SubtitleStyle[K]) {
+    setSubtitleStyle((style) => ({ ...style, [key]: value }));
   }
 
   function updateSubtitle(id: number, field: "zh" | "en", value: string) {
@@ -156,7 +329,18 @@ export default function Home() {
   }
 
   function downloadProject() {
-    const payload = { project: "城市漫游", platform, fps: exportFps, ratio, subtitles, segments, music: musicName };
+    const payload = {
+      project: "城市漫游",
+      platform,
+      fps: exportFps,
+      ratio,
+      clips: clips.map((clip) => ({ id: clip.id, name: clip.name, sourcePath: clip.sourcePath, duration: clip.duration, color: clip.color })),
+      segments,
+      subtitles,
+      subtitleStyle,
+      recognitionEngine,
+      music: musicName,
+    };
     const link = document.createElement("a");
     link.href = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" }));
     link.download = "frameflow-project.json";
@@ -213,21 +397,28 @@ export default function Home() {
   }
 
   useEffect(() => {
+    // Canvas drawing is an imperative synchronization with the cover editor.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (coverOpen) renderCover(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [coverOpen, coverTitle, coverAccent]);
 
   const panelContent = {
     media: <>
       <div className="panel-heading"><div><span className="eyebrow">MEDIA</span><h2>项目媒体</h2></div><button className="icon-button">•••</button></div>
-      <button className="upload-card" onClick={() => videoInputRef.current?.click()}><span>＋</span><strong>导入本地视频</strong><small>MP4、MOV、WebM，最大 4K</small></button>
-      <h3 className="section-title">当前素材</h3>
-      <div className="media-card"><div className="media-thumb"><span>▶</span></div><div><strong>{videoName}</strong><small>{formatTime(duration)} · 1920×1080</small></div></div>
+      <button className="upload-card" onClick={() => videoInputRef.current?.click()}><span>＋</span><strong>导入多个视频片段</strong><small>可多选 MP4、MOV、WebM</small></button>
+      <h3 className="section-title">项目素材 · {clips.length}</h3>
+      <div className="media-list">{clips.map((clip) => <button className="media-card" key={clip.id} onClick={() => {
+        const segment = timelineSegments.find((item) => item.clipId === clip.id);
+        if (segment) { setCurrent(segment.timelineStart); setSelectedSegment(segment.id); }
+      }}><div className="media-thumb" style={{ background: clip.color }}><span>▶</span></div><div><strong>{clip.name}</strong><small>{formatTime(clip.duration)} · 本地视频</small></div></button>)}</div>
+      {!clips.length && <p className="empty-hint">尚未导入素材。选择多个视频后会按顺序加入时间线。</p>}
     </>,
     audio: <>
       <div className="panel-heading"><div><span className="eyebrow">AUDIO</span><h2>背景音乐</h2></div><button className="icon-button">＋</button></div>
       <button className="upload-card audio-upload" onClick={() => musicInputRef.current?.click()}><span>♫</span><strong>添加音乐或音效</strong><small>支持 MP3、WAV、M4A</small></button>
       <h3 className="section-title">已添加</h3>
-      <div className="song-card"><button>▶</button><div><strong>{musicName}</strong><small>02:36 · 背景音乐</small></div><span>•••</span></div>
+      {musicName ? <div className="song-card"><button>▶</button><div><strong>{musicName}</strong><small>背景音乐</small></div><span>•••</span></div> : <p className="empty-hint">尚未添加背景音乐</p>}
       <label className="range-label"><span>音乐音量</span><b>38%</b></label><input className="range" type="range" defaultValue="38" />
       <label className="switch-row"><span><strong>智能避让</strong><small>有人声时自动降低音乐</small></span><input type="checkbox" defaultChecked /></label>
     </>,
@@ -239,8 +430,17 @@ export default function Home() {
     subtitles: <>
       <div className="panel-heading"><div><span className="eyebrow">AI CAPTIONS</span><h2>自动字幕</h2></div><span className="ai-badge">AI</span></div>
       <div className="language-switch"><button className={subtitleMode === "zh" ? "active" : ""} onClick={() => setSubtitleMode("zh")}>中文</button><button className={subtitleMode === "en" ? "active" : ""} onClick={() => setSubtitleMode("en")}>English</button><button className={subtitleMode === "both" ? "active" : ""} onClick={() => setSubtitleMode("both")}>中英双语</button></div>
+      <div className="engine-switch"><button className={recognitionEngine === "cloud" ? "active" : ""} onClick={() => setRecognitionEngine("cloud")}><b>☁</b><span>云端模型<small>速度快 · 需要网络</small></span></button><button className={recognitionEngine === "local" ? "active" : ""} onClick={() => { setRecognitionEngine("local"); void checkHardware(); }}><b>⌁</b><span>本地模型<small>离线 · 保护隐私</small></span></button></div>
       <button className="generate-button" onClick={generateSubtitles} disabled={isGenerating}><span>{isGenerating ? "◌" : "✦"}</span><strong>{isGenerating ? "正在识别人声…" : "重新识别字幕"}</strong><small>{isGenerating ? "正在分析音轨与语义" : "普通话 / English · 自动断句"}</small></button>
-      <div className="recognition-meta"><span><i></i> 已完成 · 96% 准确率</span><button>字幕样式 ↗</button></div>
+      <div className="recognition-meta"><span><i></i> {recognitionEngine === "cloud" ? "云端模式 · 待配置接口" : hardware?.assessment.tier === "recommended" ? "本地模式 · 推荐配置" : "本地模式 · 需要检测"}</span><button onClick={() => setStyleOpen(!styleOpen)}>字幕样式 {styleOpen ? "⌃" : "⌄"}</button></div>
+      {styleOpen && <div className="subtitle-style-editor">
+        <div className="style-editor-title"><strong>全局字幕样式</strong><span>自动应用到全部字幕</span></div>
+        <label>字体<select value={subtitleStyle.fontFamily} onChange={(event) => updateSubtitleStyle("fontFamily", event.target.value)}><option value={'Arial, "PingFang SC", "Microsoft YaHei", sans-serif'}>系统黑体</option><option value={'Georgia, "Songti SC", serif'}>中英衬线</option><option value={'"Arial Black", "PingFang SC", sans-serif'}>醒目粗体</option><option value={'"Courier New", monospace'}>等宽字体</option></select></label>
+        <label>字号 <b>{subtitleStyle.fontSize}px</b><input type="range" min="20" max="64" value={subtitleStyle.fontSize} onChange={(event) => updateSubtitleStyle("fontSize", Number(event.target.value))}/></label>
+        <div className="style-color-grid"><label>文字颜色<input type="color" value={subtitleStyle.color} onChange={(event) => updateSubtitleStyle("color", event.target.value)}/></label><label>描边颜色<input type="color" value={subtitleStyle.outlineColor} onChange={(event) => updateSubtitleStyle("outlineColor", event.target.value)}/></label></div>
+        <label>描边 <b>{subtitleStyle.outlineWidth}px</b><input type="range" min="0" max="6" value={subtitleStyle.outlineWidth} onChange={(event) => updateSubtitleStyle("outlineWidth", Number(event.target.value))}/></label>
+        <button className="reset-style" onClick={() => setSubtitleStyle(defaultSubtitleStyle)}>恢复默认样式</button>
+      </div>}
       <div className="subtitle-list">
         {subtitles.map((item) => <div className={`subtitle-row ${current >= item.start && current < item.end ? "active" : ""}`} key={item.id} onClick={() => setCurrent(item.start + 0.05)}>
           <time>{formatTime(item.start).slice(0, 5)}</time><div>
@@ -248,6 +448,7 @@ export default function Home() {
             {subtitleMode !== "zh" && <input className="translation" value={item.en} onChange={(event) => updateSubtitle(item.id, "en", event.target.value)} />}
           </div><button>⋮</button>
         </div>)}
+        {!subtitles.length && <p className="empty-hint">导入视频并选择识别模型后生成真实字幕。</p>}
       </div>
     </>,
     cover: <>
@@ -263,7 +464,7 @@ export default function Home() {
   };
 
   return <main className="app-shell">
-    <input ref={videoInputRef} className="hidden-input" type="file" accept="video/*" onChange={importVideo} />
+    <input ref={videoInputRef} className="hidden-input" type="file" accept="video/*" multiple onChange={importVideo} />
     <input ref={musicInputRef} className="hidden-input" type="file" accept="audio/*" onChange={importMusic} />
     <header className="topbar">
       <div className="brand"><span className="brand-mark"><i></i><i></i></span><strong>FrameFlow</strong></div>
@@ -283,12 +484,27 @@ export default function Home() {
       <section className="stage">
         <div className="stage-toolbar"><button className="canvas-size">画布 {ratio}⌄</button><span></span><button onClick={() => setRatio(ratio === "16:9" ? "9:16" : "16:9")}>适应画布</button><button>100%⌄</button></div>
         <div className={`video-frame ratio-${ratio.replace(":", "-")}`}>
-          {videoUrl ? <video ref={videoRef} src={videoUrl} muted={muted} onLoadedMetadata={(event) => {
-            const nextDuration = event.currentTarget.duration || 62.4;
-            setDuration(nextDuration);
-            setSegments([{ id: 1, start: 0, end: nextDuration, color: "#668cff" }]);
-          }} onTimeUpdate={(event) => setCurrent(event.currentTarget.currentTime)} onEnded={() => setPlaying(false)} /> : <div className="demo-scene"><div className="sun"></div><div className="mountain m1"></div><div className="mountain m2"></div><div className="road"></div><span className="location-tag">◉ 杭州 · 西湖边</span></div>}
-          <div className="caption-preview">
+          {videoUrl ? <video ref={videoRef} key={videoUrl} src={videoUrl} muted={muted} onLoadedMetadata={(event) => {
+            if (activeTimelineSegment) event.currentTarget.currentTime = activeTimelineSegment.sourceStart + current - activeTimelineSegment.timelineStart;
+          }} onTimeUpdate={(event) => {
+            if (!activeTimelineSegment) return;
+            const next = activeTimelineSegment.timelineStart + event.currentTarget.currentTime - activeTimelineSegment.sourceStart;
+            setCurrent(Math.min(activeTimelineSegment.timelineEnd, Math.max(activeTimelineSegment.timelineStart, next)));
+            if (event.currentTarget.currentTime >= activeTimelineSegment.sourceEnd - 0.05) {
+              const index = timelineSegments.findIndex((item) => item.id === activeTimelineSegment.id);
+              const nextSegment = timelineSegments[index + 1];
+              if (nextSegment) setCurrent(nextSegment.timelineStart);
+              else setPlaying(false);
+            }
+          }} onEnded={() => setPlaying(false)} /> : <button className="empty-stage" onClick={() => videoInputRef.current?.click()}><span>＋</span><strong>导入视频开始创作</strong><small>支持一次选择多个视频片段</small></button>}
+          <div className="caption-preview" style={{
+            color: subtitleStyle.color,
+            fontFamily: subtitleStyle.fontFamily,
+            fontSize: `${subtitleStyle.fontSize}px`,
+            WebkitTextStroke: `${subtitleStyle.outlineWidth}px ${subtitleStyle.outlineColor}`,
+            textShadow: `0 2px 6px ${subtitleStyle.outlineColor}`,
+            "--caption-bg": `rgba(0,0,0,${subtitleStyle.backgroundOpacity / 100})`,
+          } as React.CSSProperties}>
             {subtitleMode !== "en" && <strong>{activeSubtitle?.zh}</strong>}
             {subtitleMode !== "zh" && <span>{activeSubtitle?.en}</span>}
           </div>
@@ -305,11 +521,11 @@ export default function Home() {
         <div className="tracks">
           <div className="ruler">{Array.from({ length: 13 }).map((_, index) => <span key={index} style={{ left: `${index * 8.333}%` }}>{index * 5}s</span>)}</div>
           <div className="video-track">
-            {segments.map((segment) => <button key={segment.id} className={selectedSegment === segment.id ? "selected" : ""} onClick={(event) => { event.stopPropagation(); setSelectedSegment(segment.id); }} style={{ width: `${((segment.end - segment.start) / duration) * 100}%`, background: segment.color }}><i></i><span>{videoName.replace(/\.[^.]+$/, "")}</span></button>)}
+            {timelineSegments.map((segment) => <button key={segment.id} className={selectedSegment === segment.id ? "selected" : ""} onClick={(event) => { event.stopPropagation(); setSelectedSegment(segment.id); setCurrent(segment.timelineStart); }} style={{ width: `${((segment.timelineEnd - segment.timelineStart) / Math.max(duration, 1)) * 100}%`, background: segment.clip.color }}><i></i><span>{segment.clip.name.replace(/\.[^.]+$/, "")}</span></button>)}
           </div>
-          <div className="audio-track"><span className="audio-title">♫ {musicName}</span><div className="waveform">{Array.from({ length: 76 }).map((_, index) => <i key={index} style={{ height: `${20 + ((index * 17) % 70)}%` }}></i>)}</div></div>
-          <div className="caption-track">{subtitles.map((subtitle) => <button key={subtitle.id} style={{ left: `${(subtitle.start / duration) * 100}%`, width: `${((subtitle.end - subtitle.start) / duration) * 100}%` }}>{subtitle.zh}</button>)}</div>
-          <div className="playhead" style={{ left: `${(current / duration) * 100}%` }}><i></i></div>
+          <div className={`audio-track ${musicName ? "" : "empty"}`}>{musicName ? <><span className="audio-title">♫ {musicName}</span><div className="waveform">{Array.from({ length: 76 }).map((_, index) => <i key={index} style={{ height: `${20 + ((index * 17) % 70)}%` }}></i>)}</div></> : <span className="audio-title">未添加背景音乐</span>}</div>
+          <div className="caption-track">{subtitles.map((subtitle) => <button key={subtitle.id} style={{ left: `${(subtitle.start / Math.max(duration, 1)) * 100}%`, width: `${((subtitle.end - subtitle.start) / Math.max(duration, 1)) * 100}%` }}>{subtitle.zh}</button>)}</div>
+          <div className="playhead" style={{ left: `${(current / Math.max(duration, 1)) * 100}%` }}><i></i></div>
         </div>
       </div>
     </section>
@@ -332,6 +548,22 @@ export default function Home() {
         <label className="check-row"><input type="checkbox" defaultChecked/><span><strong>内嵌双语字幕</strong><small>中文字幕 + English</small></span></label>
         <div className="export-summary"><span>预计大小</span><strong>{exportFps === 60 ? "428 MB" : "286 MB"}</strong><i></i><span>预计用时</span><strong>约 2 分钟</strong></div>
         <button className="primary full large" onClick={startExport}>开始导出 · {exportFps} FPS</button>
+      </div>}
+    </section></div>}
+
+    {hardwareOpen && <div className="modal-backdrop" onMouseDown={() => setHardwareOpen(false)}><section className="hardware-modal" onMouseDown={(event) => event.stopPropagation()}>
+      <header><div><span className="eyebrow">LOCAL AI CHECK</span><h2>本地字幕硬件检测</h2></div><button onClick={() => setHardwareOpen(false)}>×</button></header>
+      {!window.frameFlowDesktop ? <div className="hardware-empty"><b>请在 DashCat 桌面版中运行检测</b><p>浏览器无法读取完整的 CPU、GPU、内存和磁盘信息。本地 faster-whisper 只在 Windows / macOS 桌面应用中提供。</p></div> : checkingHardware ? <div className="hardware-empty"><b>正在检查设备…</b><p>检测 CPU、NVIDIA CUDA GPU、系统内存、磁盘和内置 AI 运行时。</p></div> : hardware && <div className="hardware-content">
+        <div className={`hardware-verdict ${hardware.assessment.tier}`}><span>{hardware.assessment.tier === "recommended" ? "✓" : hardware.assessment.tier === "minimum" ? "!" : "×"}</span><div><b>{hardware.assessment.tier === "recommended" ? "达到推荐配置" : hardware.assessment.tier === "minimum" ? "达到最低配置" : "暂不适合本地识别"}</b><small>{hardware.assessment.tier === "unsupported" ? "建议使用云端模型" : `建议 ${hardware.assessment.model} · ${hardware.assessment.computeType}`}</small></div></div>
+        <div className="hardware-grid"><div><span>CPU</span><b>{hardware.cpu.model}</b><small>{hardware.cpu.logicalCores} 个逻辑核心</small></div><div><span>系统内存</span><b>{hardware.memory.totalGb} GB</b><small>当前可用 {hardware.memory.freeGb} GB</small></div><div><span>图形处理器</span><b>{hardware.gpus[0]?.name || "未检测到独立 GPU"}</b><small>{hardware.gpus[0]?.fasterWhisperAcceleration ? `${hardware.gpus[0].memoryGb ?? "未知"} GB VRAM · CUDA` : "faster-whisper 将使用 CPU"}</small></div><div><span>可用磁盘</span><b>{hardware.diskFreeGb} GB</b><small>建议预留至少 10 GB</small></div></div>
+        <div className="runtime-status"><strong>内置运行时</strong><span className={hardware.runtime?.ready ? "ready" : ""}>{hardware.runtime?.ready ? `${hardware.runtime.kind === "bundled" ? "随安装包提供" : "开发环境"} · faster-whisper ${hardware.runtime.info?.fasterWhisper ?? ""}` : "不可用，请重新安装 DashCat"}</span></div>
+        {!!hardware.assessment.blockers.length && <div className="hardware-messages blockers"><b>需要解决</b>{hardware.assessment.blockers.map((item) => <span key={item}>• {item}</span>)}</div>}
+        {!!hardware.assessment.notes.length && <div className="hardware-messages"><b>检测说明</b>{hardware.assessment.notes.map((item) => <span key={item}>• {item}</span>)}</div>}
+        <div className="requirements-table"><div><b>最低配置</b><span>4 核 CPU</span><span>8 GB RAM</span><span>4 GB 空间</span><small>small · CPU INT8</small></div><div><b>推荐配置</b><span>8 核 CPU</span><span>16 GB RAM</span><span>NVIDIA 8 GB VRAM</span><small>large-v3 · CUDA FP16</small></div></div>
+        <section className="model-manager"><header><div><b>选择推理模型</b><small>默认不下载，仅在你点击后安装</small></div><span>推荐：{hardware.assessment.model}</span></header><div className="model-list">{localModels.map((model) => <button key={model.id} className={`${selectedModel === model.id ? "selected" : ""} ${model.id === hardware.assessment.model ? "recommended" : ""}`} onClick={() => setSelectedModel(model.id)}><span className="model-radio">{selectedModel === model.id ? "●" : "○"}</span><div><b>{model.label} {model.id === hardware.assessment.model && <i>推荐</i>}</b><small>{model.description} · 约 {model.approximateGb} GB</small></div>{model.installed ? <span className="model-installed">已安装</span> : <span className="model-not-installed">未下载</span>}</button>)}</div>
+          {localModels.find((model) => model.id === selectedModel)?.installed ? <div className="model-action-row"><span>模型已就绪，可离线使用</span><button onClick={() => void removeLocalModel(selectedModel)}>删除模型</button></div> : <button className="primary full" disabled={Boolean(installingModel) || hardware.assessment.tier === "unsupported" || !hardware.runtime?.ready} onClick={() => void installLocalModel(selectedModel)}>{installingModel === selectedModel ? `正在下载安装 ${selectedModel}…` : `下载安装 ${selectedModel} · 约 ${localModels.find((model) => model.id === selectedModel)?.approximateGb ?? "-"} GB`}</button>}
+        </section>
+        <div className="hardware-actions"><button className="ghost-action" onClick={() => void checkHardware()}>重新检测</button><button className="primary" disabled={hardware.assessment.tier === "unsupported" || !localModels.find((model) => model.id === selectedModel)?.installed} onClick={() => { setRecognitionEngine("local"); setHardwareOpen(false); setToast(`已选择本地 ${selectedModel} 模型`); }}>使用本地模型</button></div>
       </div>}
     </section></div>}
 
