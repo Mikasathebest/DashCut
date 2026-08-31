@@ -1,6 +1,6 @@
 # Release signing setup
 
-FrameFlow releases fail closed: a tagged release is not published unless both installers are signed and the macOS app is notarized successfully.
+DashCut releases fail closed: a tagged release is not published unless both installers are signed and the macOS app is notarized successfully.
 
 ## Required credentials
 
@@ -35,7 +35,7 @@ This workflow expects:
 With GitHub CLI authenticated, run:
 
 ```bash
-./scripts/configure-signing-secrets.sh Mikasathebest/DashCat
+./scripts/configure-signing-secrets.sh Mikasathebest/DashCut
 ```
 
 The helper reads passwords without echoing them and uploads only encrypted GitHub Actions secrets. Certificates and private keys are never committed.

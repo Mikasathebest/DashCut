@@ -56,7 +56,7 @@ async function resolveRuntime(options) {
 
 async function runEngine(args, options, execution = {}) {
   const runtime = await resolveRuntime(options);
-  if (!runtime.ready) throw new Error(options.isPackaged ? "安装包缺少本地 AI 运行时，请重新安装 DashCat" : "开发环境尚未安装 faster-whisper");
+  if (!runtime.ready) throw new Error(options.isPackaged ? "安装包缺少本地 AI 运行时，请重新安装 DashCut 极剪" : "开发环境尚未安装 faster-whisper");
   const { stdout, stderr } = await execFileAsync(runtime.executable, [...runtime.prefixArgs, ...args], {
     timeout: execution.timeout ?? 6 * 60 * 60 * 1000,
     windowsHide: true,

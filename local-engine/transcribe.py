@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""DashCat local faster-whisper JSON runner.
+"""DashCut local faster-whisper JSON runner.
 
 The desktop process invokes this file once per source video. Model weights are
 downloaded into the app data directory on first use instead of being bundled in
@@ -69,7 +69,7 @@ def main() -> int:
     if not args.input:
         parser.error("--input is required for transcription")
     if not model_is_ready(target):
-        raise RuntimeError(f"模型 {args.model} 尚未下载，请先在 DashCat 中安装")
+        raise RuntimeError(f"模型 {args.model} 尚未下载，请先在 DashCut 极剪中安装")
 
     model = WhisperModel(
         target,

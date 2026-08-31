@@ -33,7 +33,7 @@ function findPython() {
 
 const bootstrapPython = findPython();
 const runtimeDir = path.join(rootDir, "local-runtime");
-const runtimeBundle = path.join(runtimeDir, "dashcat-transcribe");
+const runtimeBundle = path.join(runtimeDir, "dashcut-transcribe");
 const workDir = path.join(rootDir, ".pyinstaller");
 const venvDir = path.join(rootDir, ".runtime-venv");
 const venvPython = process.platform === "win32" ? path.join(venvDir, "Scripts", "python.exe") : path.join(venvDir, "bin", "python");
@@ -48,7 +48,7 @@ run(venvPython, [
   "--noconfirm",
   "--clean",
   "--onedir",
-  "--name", "dashcat-transcribe",
+  "--name", "dashcut-transcribe",
   "--distpath", runtimeDir,
   "--workpath", path.join(workDir, "work"),
   "--specpath", path.join(workDir, "spec"),
@@ -60,7 +60,7 @@ run(venvPython, [
   path.join(rootDir, "local-engine", "transcribe.py"),
 ]);
 
-const executable = path.join(runtimeBundle, process.platform === "win32" ? "dashcat-transcribe.exe" : "dashcat-transcribe");
+const executable = path.join(runtimeBundle, process.platform === "win32" ? "dashcut-transcribe.exe" : "dashcut-transcribe");
 if (!existsSync(executable)) throw new Error(`Runtime executable was not produced: ${executable}`);
 run(executable, ["--runtime-info"]);
 console.log(`\nSelf-contained local AI runtime ready: ${runtimeBundle}`);
