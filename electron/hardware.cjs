@@ -119,7 +119,7 @@ function assessHardware(profile) {
   if (profile.diskFreeGb < 4) blockers.push("可用磁盘空间不足 4 GB");
   if (!cudaGpu) notes.push("未检测到可用于 faster-whisper 的 NVIDIA CUDA GPU，将使用 CPU 推理");
   if (process.platform === "darwin") notes.push("faster-whisper/CTranslate2 不能使用 Apple GPU，将在 Apple Silicon 或 Intel CPU 上运行");
-  if (!profile.runtime?.ready) blockers.push("本地 AI 运行时不可用，请重新安装 DashCat");
+  if (!profile.runtime?.ready) blockers.push("本地 AI 运行时不可用，请重新安装 DashCut 极剪");
   if (cudaGpu && Number(profile.runtime?.info?.cudaDeviceCount) < 1) notes.push("检测到 NVIDIA GPU，但当前 CUDA 运行时不可用；将自动使用 CPU，无需手动安装依赖");
 
   return { tier, model, computeType, blockers, notes };

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repository="${1:-Mikasathebest/DashCat}"
+repository="${1:-Mikasathebest/DashCut}"
 
 read -r -p "Windows OV code-signing .pfx path: " windows_certificate
 read -r -s -p "Windows .pfx password: " windows_password

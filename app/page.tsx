@@ -138,7 +138,7 @@ export default function Home() {
       id: baseId + index + 1,
       name: file.name,
       url: URL.createObjectURL(file),
-      sourcePath: window.frameFlowDesktop?.getFilePath(file) ?? "",
+      sourcePath: window.dashCutDesktop?.getFilePath(file) ?? "",
       duration: await readVideoDuration(file),
       color: clipColors[(baseId + index) % clipColors.length],
     })));
@@ -200,13 +200,13 @@ export default function Home() {
 
   async function generateSubtitles() {
     if (recognitionEngine === "local") {
-      if (!window.frameFlowDesktop) {
+      if (!window.dashCutDesktop) {
         setToast("本地识别仅支持桌面版");
         setHardwareOpen(true);
         return;
       }
       if (!hardware?.runtime?.ready) {
-        setToast("本地 AI 运行时不可用，请重新安装 DashCat");
+        setToast("本地 AI 运行时不可用，请重新安装 DashCut 极剪");
         setHardwareOpen(true);
         void checkHardware();
         return;
@@ -221,7 +221,7 @@ export default function Home() {
       setIsGenerating(true);
       try {
         const useCuda = Boolean(hardware.gpus.some((gpu) => gpu.fasterWhisperAcceleration) && Number(hardware.runtime.info?.cudaDeviceCount) > 0);
-        const response = await window.frameFlowDesktop.transcribeLocal({
+        const response = await window.dashCutDesktop.transcribeLocal({
           clips: sourceClips.map((clip) => ({ id: clip.id, path: clip.sourcePath })),
           model: selectedModel,
           device: useCuda ? "cuda" : "cpu",
@@ -261,15 +261,15 @@ export default function Home() {
 
   async function checkHardware() {
     setHardwareOpen(true);
-    if (!window.frameFlowDesktop) {
+    if (!window.dashCutDesktop) {
       setHardware(null);
       return;
     }
     setCheckingHardware(true);
     try {
       const [profile, models] = await Promise.all([
-        window.frameFlowDesktop.getHardwareProfile(),
-        window.frameFlowDesktop.getLocalModels(),
+        window.dashCutDesktop.getHardwareProfile(),
+        window.dashCutDesktop.getLocalModels(),
       ]);
       setHardware(profile);
       setLocalModels(models);
@@ -284,11 +284,11 @@ export default function Home() {
   }
 
   async function installLocalModel(model: LocalModelInfo["id"]) {
-    if (!window.frameFlowDesktop) return;
+    if (!window.dashCutDesktop) return;
     setInstallingModel(model);
     try {
-      await window.frameFlowDesktop.installLocalModel(model);
-      setLocalModels(await window.frameFlowDesktop.getLocalModels());
+      await window.dashCutDesktop.installLocalModel(model);
+      setLocalModels(await window.dashCutDesktop.getLocalModels());
       setSelectedModel(model);
       setToast(`${model} 模型安装完成`);
     } catch (error) {
@@ -299,9 +299,9 @@ export default function Home() {
   }
 
   async function removeLocalModel(model: LocalModelInfo["id"]) {
-    if (!window.frameFlowDesktop) return;
-    await window.frameFlowDesktop.removeLocalModel(model);
-    setLocalModels(await window.frameFlowDesktop.getLocalModels());
+    if (!window.dashCutDesktop) return;
+    await window.dashCutDesktop.removeLocalModel(model);
+    setLocalModels(await window.dashCutDesktop.getLocalModels());
     setToast(`${model} 模型已删除`);
   }
 
@@ -343,7 +343,7 @@ export default function Home() {
     };
     const link = document.createElement("a");
     link.href = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" }));
-    link.download = "frameflow-project.json";
+    link.download = "dashcut-project.json";
     link.click();
     URL.revokeObjectURL(link.href);
     setToast("项目配置已保存");
@@ -386,7 +386,7 @@ export default function Home() {
     ctx.fillText("TRAVEL VLOG  ·  EP. 08", 126, 510);
     ctx.fillStyle = "rgba(255,255,255,.84)";
     ctx.font = "500 22px Arial, sans-serif";
-    ctx.fillText("FRAMEFLOW 原创视频", 126, 565);
+    ctx.fillText("DASHCUT 极剪原创视频", 126, 565);
     if (download) {
       const link = document.createElement("a");
       link.href = canvas.toDataURL("image/png");
@@ -467,7 +467,7 @@ export default function Home() {
     <input ref={videoInputRef} className="hidden-input" type="file" accept="video/*" multiple onChange={importVideo} />
     <input ref={musicInputRef} className="hidden-input" type="file" accept="audio/*" onChange={importMusic} />
     <header className="topbar">
-      <div className="brand"><span className="brand-mark"><i></i><i></i></span><strong>FrameFlow</strong></div>
+      <div className="brand"><span className="brand-mark"><i></i><i></i></span><strong>DashCut <em>极剪</em></strong></div>
       <div className="project-title"><button>‹</button><div><strong>城市漫游</strong><span>已自动保存 · 刚刚</span></div><button>⌄</button></div>
       <div className="top-actions"><button className="ghost">↶</button><button className="ghost disabled">↷</button><button className="ghost hide-mobile">快捷键</button><button className="export-button" onClick={() => setExportOpen(true)}>导出视频 <span>↗</span></button><button className="avatar">林</button></div>
     </header>
@@ -553,10 +553,10 @@ export default function Home() {
 
     {hardwareOpen && <div className="modal-backdrop" onMouseDown={() => setHardwareOpen(false)}><section className="hardware-modal" onMouseDown={(event) => event.stopPropagation()}>
       <header><div><span className="eyebrow">LOCAL AI CHECK</span><h2>本地字幕硬件检测</h2></div><button onClick={() => setHardwareOpen(false)}>×</button></header>
-      {!window.frameFlowDesktop ? <div className="hardware-empty"><b>请在 DashCat 桌面版中运行检测</b><p>浏览器无法读取完整的 CPU、GPU、内存和磁盘信息。本地 faster-whisper 只在 Windows / macOS 桌面应用中提供。</p></div> : checkingHardware ? <div className="hardware-empty"><b>正在检查设备…</b><p>检测 CPU、NVIDIA CUDA GPU、系统内存、磁盘和内置 AI 运行时。</p></div> : hardware && <div className="hardware-content">
+      {!window.dashCutDesktop ? <div className="hardware-empty"><b>请在 DashCut 极剪桌面版中运行检测</b><p>浏览器无法读取完整的 CPU、GPU、内存和磁盘信息。本地 faster-whisper 只在 Windows / macOS 桌面应用中提供。</p></div> : checkingHardware ? <div className="hardware-empty"><b>正在检查设备…</b><p>检测 CPU、NVIDIA CUDA GPU、系统内存、磁盘和内置 AI 运行时。</p></div> : hardware && <div className="hardware-content">
         <div className={`hardware-verdict ${hardware.assessment.tier}`}><span>{hardware.assessment.tier === "recommended" ? "✓" : hardware.assessment.tier === "minimum" ? "!" : "×"}</span><div><b>{hardware.assessment.tier === "recommended" ? "达到推荐配置" : hardware.assessment.tier === "minimum" ? "达到最低配置" : "暂不适合本地识别"}</b><small>{hardware.assessment.tier === "unsupported" ? "建议使用云端模型" : `建议 ${hardware.assessment.model} · ${hardware.assessment.computeType}`}</small></div></div>
         <div className="hardware-grid"><div><span>CPU</span><b>{hardware.cpu.model}</b><small>{hardware.cpu.logicalCores} 个逻辑核心</small></div><div><span>系统内存</span><b>{hardware.memory.totalGb} GB</b><small>当前可用 {hardware.memory.freeGb} GB</small></div><div><span>图形处理器</span><b>{hardware.gpus[0]?.name || "未检测到独立 GPU"}</b><small>{hardware.gpus[0]?.fasterWhisperAcceleration ? `${hardware.gpus[0].memoryGb ?? "未知"} GB VRAM · CUDA` : "faster-whisper 将使用 CPU"}</small></div><div><span>可用磁盘</span><b>{hardware.diskFreeGb} GB</b><small>建议预留至少 10 GB</small></div></div>
-        <div className="runtime-status"><strong>内置运行时</strong><span className={hardware.runtime?.ready ? "ready" : ""}>{hardware.runtime?.ready ? `${hardware.runtime.kind === "bundled" ? "随安装包提供" : "开发环境"} · faster-whisper ${hardware.runtime.info?.fasterWhisper ?? ""}` : "不可用，请重新安装 DashCat"}</span></div>
+        <div className="runtime-status"><strong>内置运行时</strong><span className={hardware.runtime?.ready ? "ready" : ""}>{hardware.runtime?.ready ? `${hardware.runtime.kind === "bundled" ? "随安装包提供" : "开发环境"} · faster-whisper ${hardware.runtime.info?.fasterWhisper ?? ""}` : "不可用，请重新安装 DashCut 极剪"}</span></div>
         {!!hardware.assessment.blockers.length && <div className="hardware-messages blockers"><b>需要解决</b>{hardware.assessment.blockers.map((item) => <span key={item}>• {item}</span>)}</div>}
         {!!hardware.assessment.notes.length && <div className="hardware-messages"><b>检测说明</b>{hardware.assessment.notes.map((item) => <span key={item}>• {item}</span>)}</div>}
         <div className="requirements-table"><div><b>最低配置</b><span>4 核 CPU</span><span>8 GB RAM</span><span>4 GB 空间</span><small>small · CPU INT8</small></div><div><b>推荐配置</b><span>8 核 CPU</span><span>16 GB RAM</span><span>NVIDIA 8 GB VRAM</span><small>large-v3 · CUDA FP16</small></div></div>

@@ -9,13 +9,13 @@ const { getModels, getRuntimeStatus, installModel, removeModel } = require("./mo
 let desktopServer;
 
 function localAiOptions() {
-  const executable = process.platform === "win32" ? "dashcat-transcribe.exe" : "dashcat-transcribe";
+  const executable = process.platform === "win32" ? "dashcut-transcribe.exe" : "dashcut-transcribe";
   return {
     isPackaged: app.isPackaged,
     modelsPath: path.join(app.getPath("userData"), "models"),
     bundledRunnerPath: app.isPackaged
-      ? path.join(process.resourcesPath, "local-runtime", "dashcat-transcribe", executable)
-      : path.join(__dirname, "..", "local-runtime", "dashcat-transcribe", executable),
+      ? path.join(process.resourcesPath, "local-runtime", "dashcut-transcribe", executable)
+      : path.join(__dirname, "..", "local-runtime", "dashcut-transcribe", executable),
     devRunnerPath: path.join(__dirname, "..", "local-engine", "transcribe.py"),
   };
 }
@@ -42,7 +42,7 @@ async function createWindow() {
     minWidth: 1060,
     minHeight: 720,
     backgroundColor: "#0c0e13",
-    title: "FrameFlow",
+    title: "DashCut 极剪",
     show: false,
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),

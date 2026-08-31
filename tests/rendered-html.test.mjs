@@ -21,12 +21,12 @@ async function render() {
   );
 }
 
-test("server-renders the FrameFlow editor", async () => {
+test("server-renders the DashCut editor", async () => {
   const response = await render();
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
   const html = await response.text();
-  assert.match(html, /<title>FrameFlow — 双语智能视频编辑器<\/title>/i);
+  assert.match(html, /<title>DashCut 极剪 — 双语智能视频编辑器<\/title>/i);
   assert.match(html, /自动字幕/);
   assert.match(html, /中英双语/);
   assert.match(html, /导出视频/);
@@ -43,7 +43,7 @@ test("ships product metadata and removes the starter preview", async () => {
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
   ]);
-  assert.match(page, /FrameFlow/);
+  assert.match(page, /DashCut/);
   assert.match(page, /accept="video\/\*"/);
   assert.match(page, /exportFps/);
   assert.match(layout, /og\.png/);
@@ -70,7 +70,7 @@ test("grades faster-whisper hardware conservatively", () => {
 });
 
 test("marks local models installed only after required files exist", async () => {
-  const modelsPath = await mkdtemp(path.join(tmpdir(), "dashcat-models-"));
+  const modelsPath = await mkdtemp(path.join(tmpdir(), "dashcut-models-"));
   const options = { modelsPath };
   try {
     assert.equal((await getModels(options)).find((model) => model.id === "small").installed, false);

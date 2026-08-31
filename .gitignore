@@ -41,7 +41,7 @@ next-env.d.ts
 /.electron-cache/
 /release/
 /.pyinstaller/
-/local-runtime/dashcat-transcribe/
+/local-runtime/dashcut-transcribe/
 /.runtime-venv/
 /.wrangler/
 /outputs/

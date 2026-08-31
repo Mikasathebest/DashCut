@@ -73,9 +73,9 @@ export async function startAppServer({ rootDir, hostname = "127.0.0.1", port = 0
       if (req.method === "HEAD" || !response.body) return res.end();
       res.end(Buffer.from(await response.arrayBuffer()));
     } catch (error) {
-      console.error("FrameFlow desktop server error", error);
+      console.error("DashCut desktop server error", error);
       res.writeHead(500, { "content-type": "text/plain; charset=utf-8" });
-      res.end("FrameFlow failed to start");
+      res.end("DashCut failed to start");
     }
   });
   await new Promise((resolve, reject) => {

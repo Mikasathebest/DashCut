@@ -32,7 +32,7 @@ declare global {
   }
 
   interface Window {
-    frameFlowDesktop?: {
+    dashCutDesktop?: {
       platform: string;
       version: string;
       getFilePath(file: File): string;

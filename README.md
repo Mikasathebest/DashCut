@@ -1,55 +1,95 @@
-# FrameFlow
+# DashCut 极剪
 
-FrameFlow 是一个面向哔哩哔哩和 YouTube 创作者的双语智能视频编辑器原型，同时支持网页与桌面应用。
+[简体中文](README.zh-CN.md) · [Download](https://github.com/Mikasathebest/DashCut/releases/latest) · [Report an issue](https://github.com/Mikasathebest/DashCut/issues)
 
-## 已实现
+## 1. Overview
 
-- 导入并预览本地视频
-- 在播放头位置分割或删除时间轴片段
-- 导入背景音乐、调整音量并开启智能避让
-- 自动生成和逐句编辑中文、英文或中英双语字幕
-- 一次导入多个视频，并按源片段缓存、映射字幕时间
-- 全局设置字幕字体、字号、颜色和描边，自动应用到所有字幕
-- 在云端与本地 `faster-whisper` 模型之间切换
-- 桌面端检测 CPU、NVIDIA GPU、内存、磁盘与本地 Python 运行时
-- 切换 16:9 / 9:16 画布
-- 通过封面设计器生成并保存 1280×720 PNG 首页图
-- 使用哔哩哔哩 / YouTube 预设配置 1080P、4K 与 30/60 FPS 导出
-- 保存包含时间轴、字幕和导出选项的项目文件
+DashCut (极剪) is a desktop-first video editor for Bilibili and YouTube creators. It focuses on the repetitive work around creator videos: import multiple clips, split and rearrange a timeline, add background music, generate a 1280 × 720 cover image, create time-aligned Chinese or English captions with local `faster-whisper`, apply one font/color/size style to every caption, and prepare 30 or 60 FPS exports. The local AI workflow checks CPU, GPU, memory, and disk before recommending a model; model weights are never downloaded until the user explicitly clicks install, and packaged users do not need to configure Python or other AI dependencies.
 
-## 本地运行
+Highlights:
 
-需要 Node.js 22.13 或更高版本。
+- Multi-clip import, preview, timeline splitting, and removal
+- Local Chinese and English speech recognition with editable caption timing and text
+- Global caption font, size, color, outline, and background controls
+- On-demand `small`, `medium`, `turbo`, and `large-v3` model management
+- Automatic hardware assessment with CPU INT8 and NVIDIA CUDA recommendations
+- Background music controls, 16:9 / 9:16 canvases, and a cover-image studio
+- Bilibili and YouTube export presets with 30 / 60 FPS choices
+- Signed `.exe` and notarized `.dmg` release pipeline
+
+> Current status: local source-language transcription is implemented. The cloud provider and automatic Chinese ↔ English translation are not configured yet; the second-language caption can be edited manually in the current release.
+
+## 2. Installation
+
+### Download an installer
+
+[**Download the latest DashCut release →**](https://github.com/Mikasathebest/DashCut/releases/latest)
+
+- Windows: download the signed `.exe`, double-click it, and follow the one-click installer.
+- macOS: download the notarized `.dmg`, open it, and move DashCut to Applications.
+- Local caption models are not bundled. Open **Captions → Local model**, review the hardware recommendation, then click **Download and install** for the model you want.
+
+### Build and run manually
+
+Requirements: Node.js 22.13+ and Python 3.9+ (Python is only needed to build the self-contained local AI runtime).
 
 ```bash
+git clone https://github.com/Mikasathebest/DashCut.git
+cd DashCut
 npm install
-npm run dev
-```
-
-浏览器打开终端显示的本地地址（默认 `http://localhost:3000`）。
-
-运行桌面应用：
-
-```bash
+npm run runtime:build
 npm run desktop
 ```
 
-## Windows 与 macOS 安装包
-
-每次推送 `v*` 版本标签（例如 `v0.1.0`），GitHub Actions 会自动：
-
-- 在 Windows 环境构建 x64 一键安装 `.exe`
-- 在 macOS 环境构建同时支持 Apple Silicon 与 Intel Mac 的通用 `.dmg`
-- 创建对应 GitHub Release，并附加两个安装包与自动生成的版本说明
-
-也可以在 GitHub Actions 页面手动运行 **Build signed desktop installers** 工作流验证安装包。
-
-Release 构建要求 Windows Authenticode 与 Apple Developer ID 签名，并自动完成 Apple notarization；缺少任何证书或公证材料时发布会直接失败。首次配置参见 [`docs/CODE_SIGNING.md`](docs/CODE_SIGNING.md)。
-
-## 验证
+Create local installers with:
 
 ```bash
-npm test
+npm run dist:win   # Windows x64 .exe
+npm run dist:mac   # macOS .dmg
 ```
 
-本地字幕引擎已经提供硬件检测、显式模型管理和随安装包分发的独立运行时。用户不需要安装 Python 或 FFmpeg；模型只在用户点击后下载。开发构建与最低/推荐配置参见 [`docs/LOCAL_AI.md`](docs/LOCAL_AI.md)。云端识别、双向翻译和最终 MP4/ASS 烧录仍需要配置对应的服务端提供方。
+Production releases require the signing credentials documented in [`docs/CODE_SIGNING.md`](docs/CODE_SIGNING.md).
+
+## 3. Tutorial
+
+![DashCut editor with global subtitle style controls](docs/images/dashcut-subtitle-style.png)
+
+### Import and edit multiple clips
+
+1. Open **Media** and select multiple video files in one import.
+2. Select a clip on the timeline, move the playhead, and click **Split**.
+3. Open **Audio** to add a music file and set its volume.
+4. Open **Cover** to edit the title/accent color and save a 1280 × 720 PNG thumbnail.
+
+### Extract Chinese or English captions locally
+
+1. Open **Captions**, choose **Local model**, and let DashCut inspect the device.
+2. Review the detected CPU, NVIDIA GPU, memory, disk, and runtime status. Pick the recommended model or another supported model.
+3. Click **Download and install**. Nothing is downloaded before this explicit action.
+4. Import the clips, select the subtitle view (**中文**, **English**, or **双语**), then click **Generate captions**.
+5. `faster-whisper` detects each clip's spoken language. Chinese recognition is written to the Chinese field; English recognition is written to the English field. Review each line and correct names or punctuation before export.
+6. For a bilingual layout today, enter the translated second line manually. Automatic Chinese ↔ English translation will be enabled after a cloud/local translation provider is integrated.
+
+![DashCut local AI hardware check and model selector](docs/images/dashcut-local-model.png)
+
+### Apply one subtitle style everywhere
+
+1. In **Captions**, click **Subtitle style**.
+2. Choose the font, text size, text color, outline color/width, and background opacity.
+3. Changes are applied immediately to every caption and reflected in the preview. Use **Restore defaults** to reset the full style.
+4. Choose the Bilibili or YouTube preset, select 30 or 60 FPS, and export after reviewing the timeline.
+
+## 4. Contributing and merging code
+
+1. Fork the repository and create a focused branch such as `feat/subtitle-translation` or `fix/timeline-split`.
+2. Install dependencies with `npm install`, implement the change, and add or update tests.
+3. Run `npm run lint`, `npm test`, and `npm run desktop:smoke` before pushing.
+4. Use a clear conventional commit, for example `feat: add bilingual translation provider`.
+5. Push the branch and open a pull request against `main`. Explain the user impact, verification steps, platforms tested, and include screenshots for UI changes.
+6. A maintainer reviews the pull request. Merge only after required checks pass and review comments are resolved; prefer **Squash and merge** so `main` keeps one coherent commit per pull request.
+
+Please keep credentials, model weights, build output, and signing certificates out of commits. For larger changes, open an issue first so the implementation and compatibility plan can be agreed on.
+
+## 5. License
+
+DashCut is released under the [MIT License](LICENSE). Third-party components and downloaded AI models remain subject to their own licenses and terms.

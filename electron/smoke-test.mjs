@@ -9,7 +9,7 @@ try {
   const response = await fetch(desktop.url);
   assert.equal(response.status, 200);
   const html = await response.text();
-  assert.match(html, /FrameFlow/);
+  assert.match(html, /DashCut/);
   assert.match(html, /自动字幕/);
   const asset = await fetch(`${desktop.url}/og.png`);
   assert.equal(asset.status, 200);

@@ -1,8 +1,8 @@
 {
-  "name": "dashcat-frameflow",
+  "name": "dashcut",
   "version": "0.1.0",
   "private": true,
-  "description": "FrameFlow bilingual video editor for Bilibili and YouTube creators",
+  "description": "DashCut (极剪), a bilingual AI video editor for Bilibili and YouTube creators",
   "author": "Mikasathebest",
   "main": "electron/main.cjs",
   "engines": {
@@ -24,8 +24,8 @@
     "db:generate": "drizzle-kit generate"
   },
   "build": {
-    "appId": "com.dashcat.frameflow",
-    "productName": "FrameFlow",
+    "appId": "com.mikasathebest.dashcut",
+    "productName": "DashCut",
     "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
     "directories": {
       "output": "release"
@@ -39,12 +39,16 @@
       {
         "from": "local-engine",
         "to": "local-engine",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*"
+        ]
       },
       {
         "from": "local-runtime",
         "to": "local-runtime",
-        "filter": ["dashcat-transcribe/**/*"]
+        "filter": [
+          "dashcut-transcribe/**/*"
+        ]
       }
     ],
     "asar": true,
@@ -62,7 +66,7 @@
       ]
     },
     "dmg": {
-      "title": "FrameFlow ${version}",
+      "title": "DashCut ${version}",
       "contents": [
         {
           "x": 130,
@@ -93,7 +97,7 @@
       "deleteAppDataOnUninstall": false,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "FrameFlow"
+      "shortcutName": "DashCut 极剪"
     }
   },
   "dependencies": {},

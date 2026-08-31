@@ -1,6 +1,6 @@
-# DashCat 本地字幕运行时
+# DashCut 极剪本地字幕运行时
 
-DashCat 桌面版可以在“自动字幕”中切换云端模型或本地 `faster-whisper`。应用安装包自带隔离的 Python、CTranslate2 和 PyAV 运行时；用户不需要安装 Python、FFmpeg 或修改环境变量。本地模型按需下载到应用数据目录，不会打进 `.exe` 或 `.dmg`。
+DashCut 极剪桌面版可以在“自动字幕”中切换云端模型或本地 `faster-whisper`。应用安装包自带隔离的 Python、CTranslate2 和 PyAV 运行时；用户不需要安装 Python、FFmpeg 或修改环境变量。本地模型按需下载到应用数据目录，不会打进 `.exe` 或 `.dmg`。
 
 ## 支持范围
 
@@ -11,9 +11,9 @@ DashCat 桌面版可以在“自动字幕”中切换云端模型或本地 `fast
 
 上面的运行时要求来自 [`faster-whisper` 官方文档](https://github.com/SYSTRAN/faster-whisper#requirements)和 [CTranslate2 硬件支持文档](https://opennmt.net/CTranslate2/hardware_support.html)。
 
-## DashCat 配置等级
+## DashCut 配置等级
 
-下面是 DashCat 为保证视频编辑期间仍有可用内存而采用的产品门槛，不是上游项目声明的绝对最低值。
+下面是 DashCut 为保证视频编辑期间仍有可用内存而采用的产品门槛，不是上游项目声明的绝对最低值。
 
 | 等级 | CPU | 系统内存 | GPU | 可用磁盘 | 默认模型 |
 | --- | --- | --- | --- | --- | --- |
@@ -24,7 +24,7 @@ DashCat 桌面版可以在“自动字幕”中切换云端模型或本地 `fast
 
 ## 模型安装行为
 
-- 首次安装 DashCat 时不会下载任何模型权重。
+- 首次安装 DashCut 时不会下载任何模型权重。
 - 选择“本地模型”会自动检测硬件，但不会开始下载。
 - 只有用户点击“下载安装”后，所选模型才会写入应用数据目录。
 - 本地识别强制使用 `local_files_only`；未安装的模型不会在识别过程中后台下载。

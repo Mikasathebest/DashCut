@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 const { contextBridge, ipcRenderer, webUtils } = require("electron");
 
-contextBridge.exposeInMainWorld("frameFlowDesktop", {
+contextBridge.exposeInMainWorld("dashCutDesktop", {
   platform: process.platform,
   version: process.versions.electron,
   getFilePath: (file) => webUtils.getPathForFile(file),
