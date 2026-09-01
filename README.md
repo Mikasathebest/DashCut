@@ -48,7 +48,7 @@ npm run dist:win   # Windows x64 .exe
 npm run dist:mac   # macOS .dmg
 ```
 
-Production releases require the signing credentials documented in [`docs/CODE_SIGNING.md`](docs/CODE_SIGNING.md).
+Production releases require the signing credentials documented in [`docs/CODE_SIGNING.md`](docs/CODE_SIGNING.md). Installers include a self-contained LGPL FFmpeg runtime built natively with VideoToolbox on macOS or MediaFoundation on Windows; details and compliance artifacts are documented in [`docs/FFMPEG_RUNTIME.md`](docs/FFMPEG_RUNTIME.md).
 
 ## 3. Tutorial
 
@@ -92,4 +92,4 @@ Please keep credentials, model weights, build output, and signing certificates o
 
 ## 5. License
 
-DashCut is released under the [MIT License](LICENSE). Third-party components and downloaded AI models remain subject to their own licenses and terms.
+DashCut is released under the [MIT License](LICENSE). FFmpeg is distributed under LGPLv2.1-or-later; other components and downloaded AI models remain subject to their own licenses and terms. See [Third-party notices](THIRD_PARTY_NOTICES.md).

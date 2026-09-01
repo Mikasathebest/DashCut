@@ -40,6 +40,18 @@ declare global {
       getLocalModels(): Promise<LocalModelInfo[]>;
       installLocalModel(model: string): Promise<{ model: string; sizeBytes?: number; alreadyInstalled?: boolean }>;
       removeLocalModel(model: string): Promise<{ model: string; removed: boolean }>;
+      exportVideo(request: {
+        segments: Array<{ path: string; sourceStart: number; sourceEnd: number }>;
+        subtitles: Array<{ start: number; end: number; zh: string; en: string }>;
+        subtitleStyle: Record<string, string | number>;
+        musicPath: string;
+        musicVolume: number;
+        fps: 30 | 60;
+        resolution: 720 | 1080 | 2160;
+        platform: "bilibili" | "youtube";
+      }): Promise<{ canceled?: boolean; outputPath?: string; duration?: number; subtitleFiles?: string[] }>;
+      revealExport(target: string): Promise<void>;
+      onExportProgress(callback: (progress: { progress: number; stage: string }) => void): () => void;
       transcribeLocal(request: {
         clips: Array<{ id: number; path: string }>;
         model: string;

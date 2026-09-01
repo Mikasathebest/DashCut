@@ -48,7 +48,7 @@ npm run dist:win   # Windows x64 .exe
 npm run dist:mac   # macOS .dmg
 ```
 
-正式发布需要签名证书，配置方式见 [`docs/CODE_SIGNING.md`](docs/CODE_SIGNING.md)。
+正式发布需要签名证书，配置方式见 [`docs/CODE_SIGNING.md`](docs/CODE_SIGNING.md)。安装包内置独立的 LGPL FFmpeg 运行时：macOS 使用 VideoToolbox，Windows 使用 MediaFoundation；构建与合规材料见 [`docs/FFMPEG_RUNTIME.md`](docs/FFMPEG_RUNTIME.md)。
 
 ## 3. 使用教程
 
@@ -92,4 +92,4 @@ npm run dist:mac   # macOS .dmg
 
 ## 5. License
 
-DashCut 极剪以 [MIT License](LICENSE) 开源。第三方组件和用户下载的 AI 模型分别遵循其自身许可证与使用条款。
+DashCut 极剪以 [MIT License](LICENSE) 开源。FFmpeg 以 LGPLv2.1-or-later 分发；其他第三方组件和用户下载的 AI 模型分别遵循其自身许可证与使用条款，详见[第三方声明](THIRD_PARTY_NOTICES.md)。
