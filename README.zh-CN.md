@@ -48,7 +48,7 @@ npm run dist:win   # Windows x64 .exe
 npm run dist:mac   # macOS .dmg
 ```
 
-正式发布需要签名证书，配置方式见 [`docs/CODE_SIGNING.md`](docs/CODE_SIGNING.md)。安装包内置独立的 LGPL FFmpeg 运行时：macOS 使用 VideoToolbox，Windows 使用 MediaFoundation；构建与合规材料见 [`docs/FFMPEG_RUNTIME.md`](docs/FFMPEG_RUNTIME.md)。
+Windows x64 无需证书即可发布未签名的一键安装 `.exe`，但 Windows 可能显示“未知发布者”或 SmartScreen 警告；macOS 公证安装包需要 Apple Developer 凭据，详见 [`docs/CODE_SIGNING.md`](docs/CODE_SIGNING.md)。安装包内置独立的 LGPL FFmpeg 运行时：macOS 使用 VideoToolbox，Windows 使用 MediaFoundation；构建与合规材料见 [`docs/FFMPEG_RUNTIME.md`](docs/FFMPEG_RUNTIME.md)。
 
 ## 3. 使用教程
 

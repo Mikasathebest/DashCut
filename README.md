@@ -48,7 +48,7 @@ npm run dist:win   # Windows x64 .exe
 npm run dist:mac   # macOS .dmg
 ```
 
-Production releases require the signing credentials documented in [`docs/CODE_SIGNING.md`](docs/CODE_SIGNING.md). Installers include a self-contained LGPL FFmpeg runtime built natively with VideoToolbox on macOS or MediaFoundation on Windows; details and compliance artifacts are documented in [`docs/FFMPEG_RUNTIME.md`](docs/FFMPEG_RUNTIME.md).
+Windows x64 releases produce an unsigned one-click `.exe` without credentials; Windows may display an unknown-publisher or SmartScreen warning. Apple Developer credentials are required for notarized macOS installers. See [`docs/CODE_SIGNING.md`](docs/CODE_SIGNING.md). Installers include a self-contained LGPL FFmpeg runtime built natively with VideoToolbox on macOS or MediaFoundation on Windows; details and compliance artifacts are documented in [`docs/FFMPEG_RUNTIME.md`](docs/FFMPEG_RUNTIME.md).
 
 ## 3. Tutorial
 
