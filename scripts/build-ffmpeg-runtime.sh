@@ -209,6 +209,8 @@ fi
 
 ffmpeg_binary="$runtime_dir/$executable_name"
 build_configuration="$($ffmpeg_binary -hide_banner -buildconf 2>&1)"
+available_encoders="$($ffmpeg_binary -hide_banner -encoders 2>&1)"
+available_filters="$($ffmpeg_binary -hide_banner -filters 2>&1)"
 if grep -q -- '--enable-nonfree' <<<"$build_configuration"; then
   echo "Refusing to package an FFmpeg build with --enable-nonfree" >&2
   exit 1
@@ -217,11 +219,11 @@ if grep -q -- '--enable-gpl' <<<"$build_configuration"; then
   echo "Refusing to package a GPL FFmpeg build in the LGPL runtime" >&2
   exit 1
 fi
-if ! "$ffmpeg_binary" -hide_banner -encoders 2>&1 | grep -q " $required_encoder "; then
+if ! grep -q " $required_encoder " <<<"$available_encoders"; then
   echo "$required_encoder was not built for $platform" >&2
   exit 1
 fi
-if ! "$ffmpeg_binary" -hide_banner -filters 2>&1 | grep -Eq '[[:space:]]ass[[:space:]]'; then
+if ! grep -Eq '[[:space:]]ass[[:space:]]' <<<"$available_filters"; then
   echo "The libass subtitle filter was not built" >&2
   exit 1
 fi

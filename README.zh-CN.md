@@ -15,7 +15,7 @@ DashCut（极剪）是一款面向哔哩哔哩和 YouTube 创作者的桌面视�
 - 自动检测硬件，并提供 CPU INT8 或 NVIDIA CUDA 推理建议
 - 背景音乐、16:9 / 9:16 画布和封面设计器
 - 哔哩哔哩 / YouTube 导出预设与 30 / 60 FPS 选项
-- Windows 签名 `.exe` 与 macOS 签名、公证 `.dmg` 自动发布流程
+- Windows x64 未签名一键安装 `.exe`；配置 Apple 凭据后自动发布已签名、公证的 `.dmg`
 
 > 当前状态：本地原语言字幕提取已经实现。云端识别提供方和中英自动互译尚未配置；当前版本可以手动编辑第二语言字幕。
 
@@ -25,7 +25,7 @@ DashCut（极剪）是一款面向哔哩哔哩和 YouTube 创作者的桌面视�
 
 [**下载最新版 DashCut 极剪 →**](https://github.com/Mikasathebest/DashCut/releases/latest)
 
-- Windows：下载已签名的 `.exe`，双击后按一键安装流程完成安装。
+- Windows：下载 x64 `.exe` 后双击安装；由于尚未签名，Windows 可能显示“未知发布者”或 SmartScreen 确认页。
 - macOS：下载已公证的 `.dmg`，打开后把 DashCut 拖入“应用程序”。
 - 本地字幕模型不会预装。打开 **字幕 → 本地模型**，查看硬件建议，再点击 **下载安装** 所需模型。
 
