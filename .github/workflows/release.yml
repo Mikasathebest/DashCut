@@ -60,7 +60,26 @@ jobs:
       - run: npm ci
       - name: Build LGPL FFmpeg with MediaFoundation
         shell: msys2 {0}
-        run: bash scripts/build-ffmpeg-runtime.sh
+        run: |
+          set +e
+          bash scripts/build-ffmpeg-runtime.sh 2>&1 | tee ffmpeg-build.log
+          build_status=${PIPESTATUS[0]}
+          set -e
+          if [[ $build_status -ne 0 ]]; then
+            diagnostic="$(tail -n 60 ffmpeg-build.log)"
+            diagnostic="${diagnostic//'%'/'%25'}"
+            diagnostic="${diagnostic//$'\r'/'%0D'}"
+            diagnostic="${diagnostic//$'\n'/'%0A'}"
+            echo "::error title=FFmpeg runtime build failed::$diagnostic"
+            exit "$build_status"
+          fi
+      - name: Upload FFmpeg failure log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-ffmpeg-build-log
+          path: ffmpeg-build.log
+          if-no-files-found: ignore
       - run: npm run media:verify
       - name: Match package version to release tag
         if: startsWith(github.ref, 'refs/tags/v')
