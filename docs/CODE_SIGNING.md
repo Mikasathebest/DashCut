@@ -2,7 +2,7 @@
 
 DashCut always builds a one-click Windows x64 NSIS installer. Windows signing is currently optional, so an unsigned installer displays `Unknown publisher` and might trigger Microsoft Defender SmartScreen.
 
-macOS installers are built only when all Apple signing and notarization credentials are configured. A tagged release still publishes the Windows installer when Apple credentials are absent.
+Every tagged release builds macOS arm64 and Intel x64 DMGs. Without Apple credentials they are unsigned and not notarized, so Gatekeeper may require the user to explicitly allow the first launch. When all Apple credentials are present, the same workflow signs and notarizes both DMGs automatically.
 
 ## Required credentials
 
@@ -42,9 +42,8 @@ The helper reads passwords without echoing them and uploads only encrypted GitHu
 Run the **Build desktop installers** workflow manually. It verifies:
 
 - the unsigned Windows x64 one-click installer was produced;
-- the macOS application has a strict Developer ID signature;
-- Apple notarization succeeded and a ticket is stapled;
-- Gatekeeper accepts the application;
-- the final DMG is signed.
+- both macOS arm64 and Intel x64 DMGs were produced and contain an application for the requested architecture;
+- when Apple credentials are configured, the macOS application has a strict Developer ID signature;
+- when Apple credentials are configured, notarization succeeded, a ticket is stapled, and Gatekeeper accepts the application.
 
-After validation, pushing a tag such as `v0.1.0` always attaches the unsigned Windows x64 `.exe`. When Apple credentials are configured, it also attaches notarized macOS arm64 and x64 `.dmg` installers.
+After validation, pushing a tag such as `v0.1.0` attaches the Windows x64 `.exe` plus macOS arm64 and x64 `.dmg` installers. Apple credentials change the macOS artifacts from unsigned/unnotarized to Developer ID signed/notarized; they do not control whether the DMGs are built.
