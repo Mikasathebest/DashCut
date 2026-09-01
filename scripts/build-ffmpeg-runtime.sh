@@ -175,7 +175,7 @@ case "$(uname -s)" in
   MINGW*|MSYS*)
     platform="Windows"
     required_encoder="h264_mf"
-    platform_config=(--target-os=mingw32 --arch=x86_64 --disable-pthreads --enable-w32threads --enable-mediafoundation --disable-videotoolbox)
+    platform_config=(--target-os=mingw32 --arch=x86_64 --disable-pthreads --enable-w32threads --enable-d3d11va --enable-mediafoundation --disable-videotoolbox)
     jobs="${NUMBER_OF_PROCESSORS:-4}"
     executable_name="ffmpeg.exe"
     ;;
