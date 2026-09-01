@@ -1,19 +1,16 @@
 # Release signing setup
 
-DashCut releases fail closed: a tagged release is not published unless both installers are signed and the macOS app is notarized successfully.
+DashCut always builds a one-click Windows x64 NSIS installer. Windows signing is currently optional, so an unsigned installer displays `Unknown publisher` and might trigger Microsoft Defender SmartScreen.
+
+macOS installers are built only when all Apple signing and notarization credentials are configured. A tagged release still publishes the Windows installer when Apple credentials are absent.
 
 ## Required credentials
 
 ### Windows
 
-Obtain an exportable OV Authenticode code-signing certificate from a trusted CA and export it as a password-protected `.pfx` containing its private key.
+No Windows signing secrets are currently required. The release workflow builds an unsigned x64 `.exe` with NSIS `oneClick` enabled.
 
-This workflow expects:
-
-- `WINDOWS_CERTIFICATE_BASE64`: base64-encoded `.pfx`
-- `WIN_CSC_KEY_PASSWORD`: `.pfx` password
-
-EV certificates stored on hardware tokens cannot be exported as `.pfx`; use Azure Trusted Signing or an HSM-specific workflow instead.
+New publicly trusted code-signing certificates normally keep their private keys in hardware or a compliant cloud HSM and cannot be exported as `.pfx`. For trusted Windows releases, migrate the workflow to Microsoft Artifact Signing or another CI-compatible remote signing service instead of uploading a private key to GitHub.
 
 ### macOS
 
@@ -30,9 +27,9 @@ This workflow expects:
 - `APPLE_API_KEY_ID`: App Store Connect API Key ID
 - `APPLE_API_ISSUER`: App Store Connect API Issuer ID
 
-## Upload secrets
+## Upload Apple secrets
 
-With GitHub CLI authenticated, run:
+Add the five Apple secrets through GitHub **Settings → Secrets and variables → Actions**, use `gh secret set` directly, or run the repository helper after authenticating GitHub CLI:
 
 ```bash
 ./scripts/configure-signing-secrets.sh Mikasathebest/DashCut
@@ -42,12 +39,12 @@ The helper reads passwords without echoing them and uploads only encrypted GitHu
 
 ## Validate
 
-Run the **Build signed desktop installers** workflow manually. It verifies:
+Run the **Build desktop installers** workflow manually. It verifies:
 
-- the Windows installer has a valid Authenticode signature;
+- the unsigned Windows x64 one-click installer was produced;
 - the macOS application has a strict Developer ID signature;
 - Apple notarization succeeded and a ticket is stapled;
 - Gatekeeper accepts the application;
 - the final DMG is signed.
 
-After validation, pushing a tag such as `v0.1.0` builds and attaches the signed `.exe` and notarized universal `.dmg` to the GitHub Release.
+After validation, pushing a tag such as `v0.1.0` always attaches the unsigned Windows x64 `.exe`. When Apple credentials are configured, it also attaches notarized macOS arm64 and x64 `.dmg` installers.
