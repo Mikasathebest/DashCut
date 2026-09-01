@@ -114,7 +114,9 @@ copy_macos_licenses() {
       cp "$license" "$target_dir/$(basename "$license")"
     done < <(find "$formula_root" -maxdepth 4 -type f \( -iname 'LICENSE*' -o -iname 'COPYING*' -o -iname 'NOTICE*' \) -print)
     printf 'Homebrew formula: https://formulae.brew.sh/formula/%s\n' "$formula" > "$target_dir/SOURCE.txt"
-  done < <(printf '%s\n' libass; brew deps --recursive libass)
+  # Homebrew's current `deps` command is recursive by default; `--recursive`
+  # now belongs to `brew uses` and is rejected by `brew deps`.
+  done < <(printf '%s\n' libass; brew deps libass)
 }
 
 copy_windows_licenses() {
