@@ -46,7 +46,7 @@ npm run dist:win
 npm run dist:mac
 ```
 
-Release 工作流始终在 Windows x64 环境构建运行时和未签名的一键安装包；配置 Apple 凭据后，也会在 macOS Apple Silicon 和 Intel 环境构建、签名并公证安装包。PyInstaller 会把 Python 解释器和依赖复制进应用资源目录，模型权重仍保持按需下载。[PyInstaller 运行方式](https://pyinstaller.org/en/stable/operating-mode.html)
+Release 工作流始终构建 Windows x64 一键安装包，以及 macOS Apple Silicon / Intel DMG。未配置 Apple 凭据时，macOS DMG 不签名、不公证；配置完整凭据后，同一流程会自动签名并公证。PyInstaller 会把 Python 解释器和依赖复制进应用资源目录，模型权重仍保持按需下载。[PyInstaller 运行方式](https://pyinstaller.org/en/stable/operating-mode.html)
 
 ## 当前边界
 

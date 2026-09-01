@@ -15,7 +15,7 @@ DashCut（极剪）是一款面向哔哩哔哩和 YouTube 创作者的桌面视�
 - 自动检测硬件，并提供 CPU INT8 或 NVIDIA CUDA 推理建议
 - 背景音乐、16:9 / 9:16 画布和封面设计器
 - 哔哩哔哩 / YouTube 导出预设与 30 / 60 FPS 选项
-- Windows x64 未签名一键安装 `.exe`；配置 Apple 凭据后自动发布已签名、公证的 `.dmg`
+- Windows x64 未签名一键安装 `.exe`，以及 macOS arm64 / Intel x64 `.dmg`；配置 Apple 凭据后自动签名和公证
 
 > 当前状态：本地原语言字幕提取已经实现。云端识别提供方和中英自动互译尚未配置；当前版本可以手动编辑第二语言字幕。
 
@@ -26,7 +26,7 @@ DashCut（极剪）是一款面向哔哩哔哩和 YouTube 创作者的桌面视�
 [**下载最新版 DashCut 极剪 →**](https://github.com/Mikasathebest/DashCut/releases/latest)
 
 - Windows：下载 x64 `.exe` 后双击安装；由于尚未签名，Windows 可能显示“未知发布者”或 SmartScreen 确认页。
-- macOS：下载已公证的 `.dmg`，打开后把 DashCut 拖入“应用程序”。
+- macOS：根据设备下载对应的 `.dmg`（Apple Silicon 选 arm64，Intel 选 x64），打开后把 DashCut 拖入“应用程序”。在安装包尚未公证时，首次启动可能需要右键点击 DashCut 并选择“打开”，或到“系统设置 → 隐私与安全性”中允许打开。
 - 本地字幕模型不会预装。打开 **字幕 → 本地模型**，查看硬件建议，再点击 **下载安装** 所需模型。
 
 ### 从源代码手动安装
@@ -48,7 +48,7 @@ npm run dist:win   # Windows x64 .exe
 npm run dist:mac   # macOS .dmg
 ```
 
-Windows x64 无需证书即可发布未签名的一键安装 `.exe`，但 Windows 可能显示“未知发布者”或 SmartScreen 警告；macOS 公证安装包需要 Apple Developer 凭据，详见 [`docs/CODE_SIGNING.md`](docs/CODE_SIGNING.md)。安装包内置独立的 LGPL FFmpeg 运行时：macOS 使用 VideoToolbox，Windows 使用 MediaFoundation；构建与合规材料见 [`docs/FFMPEG_RUNTIME.md`](docs/FFMPEG_RUNTIME.md)。
+Windows x64 无需证书即可发布未签名的一键安装 `.exe`，但 Windows 可能显示“未知发布者”或 SmartScreen 警告；macOS arm64 和 Intel x64 无凭据时也会生成 DMG，但需要 Apple Developer 凭据才能签名、公证并正常通过 Gatekeeper。详见 [`docs/CODE_SIGNING.md`](docs/CODE_SIGNING.md)。安装包内置独立的 LGPL FFmpeg 运行时：macOS 使用 VideoToolbox，Windows 使用 MediaFoundation；构建与合规材料见 [`docs/FFMPEG_RUNTIME.md`](docs/FFMPEG_RUNTIME.md)。
 
 ## 3. 使用教程
 

@@ -15,7 +15,7 @@ Highlights:
 - Automatic hardware assessment with CPU INT8 and NVIDIA CUDA recommendations
 - Background music controls, 16:9 / 9:16 canvases, and a cover-image studio
 - Bilibili and YouTube export presets with 30 / 60 FPS choices
-- Unsigned Windows x64 one-click `.exe` releases, plus notarized `.dmg` releases when Apple credentials are configured
+- Unsigned Windows x64 one-click `.exe` releases and macOS arm64 / Intel x64 `.dmg` releases; Apple credentials automatically enable signing and notarization
 
 > Current status: local source-language transcription is implemented. The cloud provider and automatic Chinese ↔ English translation are not configured yet; the second-language caption can be edited manually in the current release.
 
@@ -26,7 +26,7 @@ Highlights:
 [**Download the latest DashCut release →**](https://github.com/Mikasathebest/DashCut/releases/latest)
 
 - Windows: download the x64 `.exe` and double-click it. Because it is unsigned, Windows may show an unknown-publisher or SmartScreen confirmation.
-- macOS: download the notarized `.dmg`, open it, and move DashCut to Applications.
+- macOS: download the `.dmg` matching your Mac (arm64 for Apple Silicon, x64 for Intel), open it, and move DashCut to Applications. Until the release is notarized, first launch may require right-clicking DashCut and choosing **Open**, or allowing it in **System Settings → Privacy & Security**.
 - Local caption models are not bundled. Open **Captions → Local model**, review the hardware recommendation, then click **Download and install** for the model you want.
 
 ### Build and run manually
@@ -48,7 +48,7 @@ npm run dist:win   # Windows x64 .exe
 npm run dist:mac   # macOS .dmg
 ```
 
-Windows x64 releases produce an unsigned one-click `.exe` without credentials; Windows may display an unknown-publisher or SmartScreen warning. Apple Developer credentials are required for notarized macOS installers. See [`docs/CODE_SIGNING.md`](docs/CODE_SIGNING.md). Installers include a self-contained LGPL FFmpeg runtime built natively with VideoToolbox on macOS or MediaFoundation on Windows; details and compliance artifacts are documented in [`docs/FFMPEG_RUNTIME.md`](docs/FFMPEG_RUNTIME.md).
+Windows x64 releases produce an unsigned one-click `.exe` without credentials; Windows may display an unknown-publisher or SmartScreen warning. macOS arm64 and Intel x64 DMGs are also produced without credentials, but Apple Developer credentials are required to sign and notarize them for a normal Gatekeeper launch. See [`docs/CODE_SIGNING.md`](docs/CODE_SIGNING.md). Installers include a self-contained LGPL FFmpeg runtime built natively with VideoToolbox on macOS or MediaFoundation on Windows; details and compliance artifacts are documented in [`docs/FFMPEG_RUNTIME.md`](docs/FFMPEG_RUNTIME.md).
 
 ## 3. Tutorial
 
