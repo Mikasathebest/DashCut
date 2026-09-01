@@ -1,10 +1,12 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
-const { app, BrowserWindow, ipcMain, shell } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
+const { existsSync } = require("node:fs");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 const { getHardwareProfile } = require("./hardware.cjs");
 const { transcribeLocal } = require("./local-transcription.cjs");
 const { getModels, getRuntimeStatus, installModel, removeModel } = require("./model-manager.cjs");
+const { exportVideo } = require("./video-export.cjs");
 
 let desktopServer;
 
@@ -20,6 +22,15 @@ function localAiOptions() {
   };
 }
 
+function mediaRuntimePath() {
+  if (process.env.DASHCUT_FFMPEG_PATH) return process.env.DASHCUT_FFMPEG_PATH;
+  const executable = process.platform === "win32" ? "ffmpeg.exe" : "ffmpeg";
+  const expected = app.isPackaged
+    ? path.join(process.resourcesPath, "media-runtime", executable)
+    : path.join(__dirname, "..", "media-runtime", "current", executable);
+  return app.isPackaged || existsSync(expected) ? expected : undefined;
+}
+
 ipcMain.handle("hardware:get-profile", async () => {
   const options = localAiOptions();
   const runtime = await getRuntimeStatus(options);
@@ -31,6 +42,24 @@ ipcMain.handle("models:remove", (_event, model) => removeModel(model, localAiOpt
 ipcMain.handle("transcription:local", (_event, request) => {
   const options = localAiOptions();
   return transcribeLocal(request, { ...options, getRuntimeStatus: () => getRuntimeStatus(options) });
+});
+ipcMain.handle("export:video", async (event, request) => {
+  const result = await dialog.showSaveDialog({
+    title: "导出视频",
+    defaultPath: "DashCut-export.mp4",
+    filters: [{ name: "MP4 Video", extensions: ["mp4"] }],
+  });
+  if (result.canceled || !result.filePath) return { canceled: true };
+  return exportVideo(request, {
+    outputPath: result.filePath,
+    tempPath: app.getPath("temp"),
+    ffmpegPath: mediaRuntimePath(),
+    platform: process.platform,
+    onProgress: (progress) => event.sender.send("export:progress", progress),
+  });
+});
+ipcMain.handle("export:reveal", (_event, target) => {
+  if (typeof target === "string" && path.isAbsolute(target)) shell.showItemInFolder(target);
 });
 
 async function createWindow() {

@@ -42,6 +42,8 @@ next-env.d.ts
 /release/
 /.pyinstaller/
 /local-runtime/dashcut-transcribe/
+/media-runtime/current/
+/.ffmpeg-build/
 /.runtime-venv/
 /.wrangler/
 /outputs/

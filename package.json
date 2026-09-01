@@ -12,14 +12,16 @@
     "dev": "vinext dev",
     "build": "vinext build",
     "start": "vinext start",
-    "test": "npm run build && node --test tests/rendered-html.test.mjs",
+    "test": "npm run build && node --test tests/rendered-html.test.mjs tests/video-export.test.mjs",
     "desktop": "npm run build && electron .",
     "desktop:smoke": "node electron/smoke-test.mjs",
     "runtime:build": "node scripts/build-local-runtime.mjs",
-    "dist:mac": "npm run runtime:build && npm run build && electron-builder --mac dmg --publish never",
-    "dist:win": "npm run runtime:build && npm run build && electron-builder --win nsis --x64 --publish never",
-    "release:mac": "npm run runtime:build && npm run build && electron-builder --mac dmg --publish never -c.forceCodeSigning=true",
-    "release:win": "npm run runtime:build && npm run build && electron-builder --win nsis --x64 --publish never -c.forceCodeSigning=true",
+    "media:build": "bash scripts/build-ffmpeg-runtime.sh",
+    "media:verify": "node scripts/verify-ffmpeg-runtime.mjs",
+    "dist:mac": "npm run runtime:build && npm run media:verify && npm run build && electron-builder --mac dmg --publish never",
+    "dist:win": "npm run runtime:build && npm run media:verify && npm run build && electron-builder --win nsis --x64 --publish never",
+    "release:mac": "npm run runtime:build && npm run media:verify && npm run build && electron-builder --mac dmg --publish never -c.forceCodeSigning=true",
+    "release:win": "npm run runtime:build && npm run media:verify && npm run build && electron-builder --win nsis --x64 --publish never -c.forceCodeSigning=true",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate"
   },
@@ -49,6 +51,17 @@
         "filter": [
           "dashcut-transcribe/**/*"
         ]
+      },
+      {
+        "from": "media-runtime/current",
+        "to": "media-runtime",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "THIRD_PARTY_NOTICES.md",
+        "to": "THIRD_PARTY_NOTICES.md"
       }
     ],
     "asar": true,
@@ -58,10 +71,7 @@
       "notarize": true,
       "target": [
         {
-          "target": "dmg",
-          "arch": [
-            "universal"
-          ]
+          "target": "dmg"
         }
       ]
     },
@@ -109,8 +119,8 @@
     "@types/react-dom": "19.2.3",
     "@vitejs/plugin-react": "6.0.2",
     "@vitejs/plugin-rsc": "0.5.26",
-    "drizzle-orm": "0.45.2",
     "drizzle-kit": "0.31.10",
+    "drizzle-orm": "0.45.2",
     "electron": "^37.10.3",
     "electron-builder": "^26.15.3",
     "eslint": "9.39.4",

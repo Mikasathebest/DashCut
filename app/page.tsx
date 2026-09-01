@@ -62,6 +62,8 @@ export default function Home() {
   const [panel, setPanel] = useState<Panel>("subtitles");
   const [clips, setClips] = useState<MediaClip[]>([]);
   const [musicName, setMusicName] = useState("");
+  const [musicPath, setMusicPath] = useState("");
+  const [musicVolume, setMusicVolume] = useState(0.35);
   const [current, setCurrent] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [muted, setMuted] = useState(false);
@@ -72,13 +74,17 @@ export default function Home() {
   const [selectedSegment, setSelectedSegment] = useState(0);
   const [isGenerating, setIsGenerating] = useState(false);
   const [coverOpen, setCoverOpen] = useState(false);
+  const [aboutOpen, setAboutOpen] = useState(false);
   const [coverTitle, setCoverTitle] = useState("独自旅行的 48 小时");
   const [coverAccent, setCoverAccent] = useState("#ffcc45");
   const [exportOpen, setExportOpen] = useState(false);
   const [exportFps, setExportFps] = useState<30 | 60>(60);
+  const [exportResolution, setExportResolution] = useState<720 | 1080 | 2160>(1080);
   const [platform, setPlatform] = useState<"bilibili" | "youtube">("bilibili");
   const [exporting, setExporting] = useState(false);
   const [progress, setProgress] = useState(0);
+  const [progressStage, setProgressStage] = useState("");
+  const [exportResult, setExportResult] = useState<{ outputPath: string; subtitleFiles: string[] } | null>(null);
   const [toast, setToast] = useState("");
   const [subtitleStyle, setSubtitleStyle] = useState<SubtitleStyle>(defaultSubtitleStyle);
   const [styleOpen, setStyleOpen] = useState(false);
@@ -130,6 +136,14 @@ export default function Home() {
     return () => window.clearTimeout(id);
   }, [toast]);
 
+  useEffect(() => {
+    if (!window.dashCutDesktop) return;
+    return window.dashCutDesktop.onExportProgress(({ progress: nextProgress, stage }) => {
+      setProgress(nextProgress);
+      setProgressStage(stage);
+    });
+  }, []);
+
   async function importVideo(event: ChangeEvent<HTMLInputElement>) {
     const files = Array.from(event.target.files ?? []);
     if (!files.length) return;
@@ -159,6 +173,7 @@ export default function Home() {
     const file = event.target.files?.[0];
     if (!file) return;
     setMusicName(file.name.replace(/\.[^.]+$/, ""));
+    setMusicPath(window.dashCutDesktop?.getFilePath(file) ?? "");
     setPanel("audio");
     setToast("背景音乐已添加");
   }
@@ -313,40 +328,34 @@ export default function Home() {
     setSubtitles((items) => items.map((item) => item.id === id ? { ...item, [field]: value } : item));
   }
 
-  function startExport() {
+  async function startExport() {
+    if (!window.dashCutDesktop) return setToast("真实视频导出仅支持桌面版");
+    if (!timelineSegments.length) return setToast("请先导入视频");
     setExporting(true);
-    setProgress(8);
-    const timer = window.setInterval(() => {
-      setProgress((value) => {
-        const next = Math.min(100, value + Math.ceil(Math.random() * 13));
-        if (next >= 100) {
-          window.clearInterval(timer);
-          window.setTimeout(() => setExporting(false), 500);
-        }
-        return next;
+    setExportResult(null);
+    setProgress(0);
+    setProgressStage("正在准备导出");
+    try {
+      const result = await window.dashCutDesktop.exportVideo({
+        segments: timelineSegments.map((segment) => ({ path: segment.clip.sourcePath, sourceStart: segment.sourceStart, sourceEnd: segment.sourceEnd })),
+        subtitles,
+        subtitleStyle,
+        musicPath,
+        musicVolume,
+        fps: exportFps,
+        resolution: exportResolution,
+        platform,
       });
-    }, 260);
-  }
-
-  function downloadProject() {
-    const payload = {
-      project: "城市漫游",
-      platform,
-      fps: exportFps,
-      ratio,
-      clips: clips.map((clip) => ({ id: clip.id, name: clip.name, sourcePath: clip.sourcePath, duration: clip.duration, color: clip.color })),
-      segments,
-      subtitles,
-      subtitleStyle,
-      recognitionEngine,
-      music: musicName,
-    };
-    const link = document.createElement("a");
-    link.href = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" }));
-    link.download = "dashcut-project.json";
-    link.click();
-    URL.revokeObjectURL(link.href);
-    setToast("项目配置已保存");
+      if (!result.canceled && result.outputPath) {
+        setExportResult({ outputPath: result.outputPath, subtitleFiles: result.subtitleFiles ?? [] });
+        setProgress(100);
+        setProgressStage("导出完成");
+      }
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "视频导出失败");
+    } finally {
+      setExporting(false);
+    }
   }
 
   function renderCover(download = false) {
@@ -419,8 +428,8 @@ export default function Home() {
       <button className="upload-card audio-upload" onClick={() => musicInputRef.current?.click()}><span>♫</span><strong>添加音乐或音效</strong><small>支持 MP3、WAV、M4A</small></button>
       <h3 className="section-title">已添加</h3>
       {musicName ? <div className="song-card"><button>▶</button><div><strong>{musicName}</strong><small>背景音乐</small></div><span>•••</span></div> : <p className="empty-hint">尚未添加背景音乐</p>}
-      <label className="range-label"><span>音乐音量</span><b>38%</b></label><input className="range" type="range" defaultValue="38" />
-      <label className="switch-row"><span><strong>智能避让</strong><small>有人声时自动降低音乐</small></span><input type="checkbox" defaultChecked /></label>
+      <label className="range-label"><span>音乐音量</span><b>{Math.round(musicVolume * 100)}%</b></label><input className="range" type="range" min="0" max="100" value={Math.round(musicVolume * 100)} onChange={(event) => setMusicVolume(Number(event.target.value) / 100)} />
+      <p className="empty-hint">导出时会将背景音乐与原视频声音真实混合。</p>
     </>,
     text: <>
       <div className="panel-heading"><div><span className="eyebrow">TEXT</span><h2>文字</h2></div></div>
@@ -469,7 +478,7 @@ export default function Home() {
     <header className="topbar">
       <div className="brand"><span className="brand-mark"><i></i><i></i></span><strong>DashCut <em>极剪</em></strong></div>
       <div className="project-title"><button>‹</button><div><strong>城市漫游</strong><span>已自动保存 · 刚刚</span></div><button>⌄</button></div>
-      <div className="top-actions"><button className="ghost">↶</button><button className="ghost disabled">↷</button><button className="ghost hide-mobile">快捷键</button><button className="export-button" onClick={() => setExportOpen(true)}>导出视频 <span>↗</span></button><button className="avatar">林</button></div>
+      <div className="top-actions"><button className="ghost">↶</button><button className="ghost disabled">↷</button><button className="ghost hide-mobile" onClick={() => setAboutOpen(true)}>关于与许可</button><button className="export-button" onClick={() => setExportOpen(true)}>导出视频 <span>↗</span></button><button className="avatar">林</button></div>
     </header>
 
     <section className="workspace">
@@ -542,12 +551,12 @@ export default function Home() {
 
     {exportOpen && <div className="modal-backdrop export-backdrop" onMouseDown={() => !exporting && setExportOpen(false)}><section className="export-modal" onMouseDown={(event) => event.stopPropagation()}>
       <header><div><span className="eyebrow">EXPORT</span><h2>导出视频</h2></div><button onClick={() => !exporting && setExportOpen(false)}>×</button></header>
-      {exporting ? <div className="export-progress"><div className="progress-ring" style={{ "--progress": `${progress * 3.6}deg` } as React.CSSProperties}><span>{progress}%</span></div><h3>{progress === 100 ? "导出完成" : "正在渲染视频"}</h3><p>{progress === 100 ? "项目设置已准备好，可保存到本地。" : `正在合成双语字幕与音频 · ${exportFps} FPS`}</p>{progress === 100 && <button className="primary" onClick={downloadProject}>保存项目文件</button>}</div> : <div className="export-form">
+      {exporting || exportResult ? <div className="export-progress"><div className="progress-ring" style={{ "--progress": `${progress * 3.6}deg` } as React.CSSProperties}><span>{progress}%</span></div><h3>{exportResult ? "导出完成" : "正在渲染视频"}</h3><p>{exportResult ? `已生成 MP4、中文 SRT 和英文 SRT` : `${progressStage} · ${exportFps} FPS`}</p>{exportResult && <div className="export-complete-actions"><button className="primary" onClick={() => window.dashCutDesktop?.revealExport(exportResult.outputPath)}>打开文件位置</button><button className="ghost-action" onClick={() => { setExportResult(null); setProgress(0); }}>继续导出</button></div>}</div> : <div className="export-form">
         <label>发布平台<div className="platform-cards"><button className={platform === "bilibili" ? "active bili" : "bili"} onClick={() => setPlatform("bilibili")}><b>哔</b><span>哔哩哔哩<small>1080P · 高码率</small></span><i>✓</i></button><button className={platform === "youtube" ? "active youtube" : "youtube"} onClick={() => setPlatform("youtube")}><b>▶</b><span>YouTube<small>1080P · H.264</small></span><i>✓</i></button></div></label>
-        <div className="export-grid"><label>分辨率<select defaultValue="1080"><option value="1080">1080P (1920×1080)</option><option value="2160">4K (3840×2160)</option><option value="720">720P (1280×720)</option></select></label><label>帧率<div className="segmented"><button className={exportFps === 30 ? "active" : ""} onClick={() => setExportFps(30)}>30 FPS</button><button className={exportFps === 60 ? "active" : ""} onClick={() => setExportFps(60)}>60 FPS</button></div></label></div>
+        <div className="export-grid"><label>分辨率<select value={exportResolution} onChange={(event) => setExportResolution(Number(event.target.value) as 720 | 1080 | 2160)}><option value="1080">1080P (1920×1080)</option><option value="2160">4K (3840×2160)</option><option value="720">720P (1280×720)</option></select></label><label>帧率<div className="segmented"><button className={exportFps === 30 ? "active" : ""} onClick={() => setExportFps(30)}>30 FPS</button><button className={exportFps === 60 ? "active" : ""} onClick={() => setExportFps(60)}>60 FPS</button></div></label></div>
         <label className="check-row"><input type="checkbox" defaultChecked/><span><strong>内嵌双语字幕</strong><small>中文字幕 + English</small></span></label>
-        <div className="export-summary"><span>预计大小</span><strong>{exportFps === 60 ? "428 MB" : "286 MB"}</strong><i></i><span>预计用时</span><strong>约 2 分钟</strong></div>
-        <button className="primary full large" onClick={startExport}>开始导出 · {exportFps} FPS</button>
+        <div className="export-summary"><span>时间线</span><strong>{formatTime(duration)}</strong><i></i><span>视频片段</span><strong>{timelineSegments.length} 个</strong></div>
+        <button className="primary full large" onClick={() => void startExport()}>开始导出 MP4 · {exportFps} FPS</button>
       </div>}
     </section></div>}
 
@@ -565,6 +574,11 @@ export default function Home() {
         </section>
         <div className="hardware-actions"><button className="ghost-action" onClick={() => void checkHardware()}>重新检测</button><button className="primary" disabled={hardware.assessment.tier === "unsupported" || !localModels.find((model) => model.id === selectedModel)?.installed} onClick={() => { setRecognitionEngine("local"); setHardwareOpen(false); setToast(`已选择本地 ${selectedModel} 模型`); }}>使用本地模型</button></div>
       </div>}
+    </section></div>}
+
+    {aboutOpen && <div className="modal-backdrop" onMouseDown={() => setAboutOpen(false)}><section className="about-modal" onMouseDown={(event) => event.stopPropagation()}>
+      <header><div><span className="eyebrow">ABOUT & LICENSES</span><h2>DashCut 极剪</h2></div><button onClick={() => setAboutOpen(false)}>×</button></header>
+      <div className="about-content"><p>面向哔哩哔哩与 YouTube 创作者的双语智能视频编辑器。</p><div><strong>视频运行时</strong><span>FFmpeg 9.0.1 · LGPLv2.1-or-later</span><small>macOS 使用 VideoToolbox，Windows 使用 MediaFoundation。安装包包含许可证、源码地址和实际构建参数。</small></div><div><strong>应用许可证</strong><span>DashCut · MIT License</span></div><a href="https://github.com/Mikasathebest/DashCut/blob/main/THIRD_PARTY_NOTICES.md" target="_blank" rel="noreferrer">查看第三方声明与对应源码 ↗</a></div>
     </section></div>}
 
     {toast && <div className="toast"><span>✓</span>{toast}</div>}

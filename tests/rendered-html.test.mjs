@@ -44,6 +44,8 @@ test("ships product metadata and removes the starter preview", async () => {
     readFile(new URL("../package.json", import.meta.url), "utf8"),
   ]);
   assert.match(page, /DashCut/);
+  assert.match(page, /关于与许可/);
+  assert.match(page, /FFmpeg 9\.0\.1/);
   assert.match(page, /accept="video\/\*"/);
   assert.match(page, /exportFps/);
   assert.match(layout, /og\.png/);
