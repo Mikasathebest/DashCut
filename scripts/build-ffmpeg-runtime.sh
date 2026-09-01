@@ -161,7 +161,6 @@ common_config=(
   --disable-libx265
   --enable-static
   --disable-shared
-  --enable-pthreads
   --enable-libass
 )
 
@@ -169,14 +168,14 @@ case "$(uname -s)" in
   Darwin)
     platform="macOS"
     required_encoder="h264_videotoolbox"
-    platform_config=(--enable-videotoolbox --disable-mediafoundation)
+    platform_config=(--enable-pthreads --disable-w32threads --enable-videotoolbox --disable-mediafoundation)
     jobs="$(sysctl -n hw.logicalcpu)"
     executable_name="ffmpeg"
     ;;
   MINGW*|MSYS*)
     platform="Windows"
     required_encoder="h264_mf"
-    platform_config=(--target-os=mingw32 --arch=x86_64 --enable-mediafoundation --disable-videotoolbox)
+    platform_config=(--target-os=mingw32 --arch=x86_64 --disable-pthreads --enable-w32threads --enable-mediafoundation --disable-videotoolbox)
     jobs="${NUMBER_OF_PROCESSORS:-4}"
     executable_name="ffmpeg.exe"
     ;;
