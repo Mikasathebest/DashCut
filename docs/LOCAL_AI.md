@@ -46,7 +46,7 @@ npm run dist:win
 npm run dist:mac
 ```
 
-Release 工作流会在 Windows x64、macOS Apple Silicon 和 macOS Intel 三种环境分别构建运行时，再签名并生成一键安装包。PyInstaller 会把 Python 解释器和依赖复制进应用资源目录，模型权重仍保持按需下载。[PyInstaller 运行方式](https://pyinstaller.org/en/stable/operating-mode.html)
+Release 工作流始终在 Windows x64 环境构建运行时和未签名的一键安装包；配置 Apple 凭据后，也会在 macOS Apple Silicon 和 Intel 环境构建、签名并公证安装包。PyInstaller 会把 Python 解释器和依赖复制进应用资源目录，模型权重仍保持按需下载。[PyInstaller 运行方式](https://pyinstaller.org/en/stable/operating-mode.html)
 
 ## 当前边界
 
