@@ -2,7 +2,7 @@
 
 DashCut always builds a one-click Windows x64 NSIS installer. Windows signing is currently optional, so an unsigned installer displays `Unknown publisher` and might trigger Microsoft Defender SmartScreen.
 
-Every tagged release builds macOS arm64 and Intel x64 DMGs. Without Apple credentials they are unsigned and not notarized, so Gatekeeper may require the user to explicitly allow the first launch. When all Apple credentials are present, the same workflow signs and notarizes both DMGs automatically.
+Every tagged release builds one Apple Silicon arm64 DMG. Without Apple credentials it is unsigned and not notarized, so Gatekeeper may require the user to explicitly allow the first launch. When all Apple credentials are present, the same workflow signs and notarizes the DMG automatically.
 
 ## Required credentials
 
@@ -42,8 +42,8 @@ The helper reads passwords without echoing them and uploads only encrypted GitHu
 Run the **Build desktop installers** workflow manually. It verifies:
 
 - the unsigned Windows x64 one-click installer was produced;
-- both macOS arm64 and Intel x64 DMGs were produced and contain an application for the requested architecture;
+- the macOS Apple Silicon DMG was produced and contains an arm64 application plus its embedded FFmpeg runtime;
 - when Apple credentials are configured, the macOS application has a strict Developer ID signature;
 - when Apple credentials are configured, notarization succeeded, a ticket is stapled, and Gatekeeper accepts the application.
 
-After validation, pushing a tag such as `v0.1.0` attaches the Windows x64 `.exe` plus macOS arm64 and x64 `.dmg` installers. Apple credentials change the macOS artifacts from unsigned/unnotarized to Developer ID signed/notarized; they do not control whether the DMGs are built.
+After validation, pushing a tag such as `v0.1.0` attaches the Windows x64 `.exe` plus one macOS Apple Silicon `.dmg`. GitHub automatically adds repository source archives. Apple credentials change the macOS artifact from unsigned/unnotarized to Developer ID signed/notarized; they do not control whether the DMG is built.

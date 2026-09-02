@@ -12,7 +12,7 @@ DashCut installers include an unmodified FFmpeg command-line runtime built from 
 - Build script: [`scripts/build-ffmpeg-runtime.sh`](scripts/build-ffmpeg-runtime.sh)
 - Configuration: LGPL only; `--enable-gpl` and `--enable-nonfree` are prohibited by the release verification step.
 
-Each installer contains the full FFmpeg LGPL text, source notice, actual build configuration, and the redistributable dynamic libraries required by that platform. Each GitHub Release also publishes the exact FFmpeg source archive and platform-specific build configurations.
+Each installer contains the FFmpeg executable, required redistributable dynamic libraries, full LGPL text, exact source URL and checksum, actual build configuration, and third-party dependency licenses for that platform. The corresponding FFmpeg source remains available from the pinned official source URL above; DashCut's build script is included in every GitHub-generated source archive.
 
 DashCut invokes the separate FFmpeg executable as a child process and does not link Electron or application code against FFmpeg libraries.
 

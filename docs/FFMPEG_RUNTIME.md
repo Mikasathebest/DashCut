@@ -5,7 +5,6 @@ DashCut builds FFmpeg from the pinned official source archive instead of dependi
 | Installer | FFmpeg encoder | Subtitle renderer |
 | --- | --- | --- |
 | macOS arm64 | `h264_videotoolbox` | `libass` |
-| macOS x64 | `h264_videotoolbox` | `libass` |
 | Windows x64 | `h264_mf` (MediaFoundation) | `libass` |
 
 On Windows, export first requests MediaFoundation hardware encoding and automatically retries with its software encoder when hardware encoding is unavailable. VideoToolbox is configured with its native software fallback on macOS.
@@ -40,6 +39,8 @@ For every release, GitHub Actions:
 3. rejects GPL or nonfree configuration;
 4. verifies VideoToolbox or MediaFoundation and the ASS filter;
 5. bundles the executable, required dynamic libraries, LGPL text, source notice, and build configuration;
-6. attaches the exact FFmpeg source archive, build script, notices, and platform build configurations to the GitHub Release.
+6. verifies that the packaged application contains FFmpeg, its required dynamic libraries, LGPL text, exact source notice, dependency licenses, and the platform build configuration.
+
+The Release page stays intentionally compact: only the Windows installer and Apple Silicon DMG are uploaded. GitHub automatically provides repository source archives in ZIP and TAR.GZ formats. The exact FFmpeg source archive remains available through the pinned URL and SHA-256 recorded inside each installer and in [`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md).
 
 See [`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md) and the [FFmpeg license checklist](https://ffmpeg.org/legal.html).
