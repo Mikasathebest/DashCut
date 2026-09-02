@@ -104,12 +104,19 @@ jobs:
             }
             Write-Host "Verified unsigned Windows x64 installer: $($installer.Name)"
           }
-      - name: Stage FFmpeg compliance record
+          $runtime = "release/win-unpacked/resources/media-runtime"
+          $requiredRuntimeFiles = @("ffmpeg.exe", "FFMPEG-LGPL-2.1.txt", "FFMPEG-SOURCE.txt", "FFMPEG-BUILD-CONFIG.txt")
+          foreach ($requiredFile in $requiredRuntimeFiles) {
+            if (-not (Test-Path "$runtime/$requiredFile")) {
+              throw "Packaged Windows installer is missing embedded FFmpeg file: $requiredFile"
+            }
+          }
+          Write-Host "Verified embedded Windows FFmpeg runtime and compliance files."
+      - name: Stage Windows installer
         shell: bash
         run: |
-          mkdir -p artifact/compliance
+          mkdir -p artifact
           cp release/*.exe artifact/
-          cp media-runtime/current/FFMPEG-BUILD-CONFIG.txt artifact/compliance/windows-x64-FFMPEG-BUILD-CONFIG.txt
       - uses: actions/upload-artifact@v7
         with:
           name: windows-installer
@@ -117,17 +124,9 @@ jobs:
           if-no-files-found: error
 
   build-macos:
-    name: Build macOS ${{ matrix.arch }} installer
+    name: Build macOS Apple Silicon installer
     needs: detect-apple-signing
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: macos-15
-            arch: arm64
-          - runner: macos-15-intel
-            arch: x64
-    runs-on: ${{ matrix.runner }}
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -160,7 +159,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v7
         with:
-          name: macos-${{ matrix.arch }}-ffmpeg-build-log
+          name: macos-arm64-ffmpeg-build-log
           path: ffmpeg-build.log
           if-no-files-found: ignore
       - run: npm run media:verify
@@ -187,7 +186,7 @@ jobs:
       - run: npm run desktop:smoke
       - name: Build signed and notarized macOS installer
         if: needs.detect-apple-signing.outputs.configured == 'true'
-        run: npm run release:mac -- --${{ matrix.arch }}
+        run: npm run release:mac -- --arm64
         env:
           CSC_LINK: ${{ runner.temp }}/macos-signing.p12
           CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
@@ -205,7 +204,7 @@ jobs:
           codesign --verify --verbose=2 release/*.dmg
       - name: Build unsigned macOS installer
         if: needs.detect-apple-signing.outputs.configured != 'true'
-        run: npm run dist:mac -- --${{ matrix.arch }} -c.mac.notarize=false
+        run: npm run dist:mac -- --arm64 -c.mac.notarize=false
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
       - name: Verify unsigned macOS installer
@@ -213,17 +212,27 @@ jobs:
         run: |
           APP_PATH="$(find release -maxdepth 2 -type d -name 'DashCut.app' -print -quit)"
           if [[ -z "$APP_PATH" ]]; then echo "DashCut.app was not produced" >&2; exit 1; fi
-          if [[ "${{ matrix.arch }}" == "arm64" ]]; then expected_arch="arm64"; else expected_arch="x86_64"; fi
-          lipo -archs "$APP_PATH/Contents/MacOS/DashCut" | grep -qw "$expected_arch"
+          lipo -archs "$APP_PATH/Contents/MacOS/DashCut" | grep -qw arm64
           hdiutil verify release/*.dmg
-      - name: Stage FFmpeg compliance record
+      - name: Verify embedded FFmpeg runtime
         run: |
-          mkdir -p artifact/compliance
+          APP_PATH="$(find release -maxdepth 2 -type d -name 'DashCut.app' -print -quit)"
+          RUNTIME_PATH="$APP_PATH/Contents/Resources/media-runtime"
+          for required_file in ffmpeg FFMPEG-LGPL-2.1.txt FFMPEG-SOURCE.txt FFMPEG-BUILD-CONFIG.txt; do
+            if [[ ! -f "$RUNTIME_PATH/$required_file" ]]; then
+              echo "Packaged macOS installer is missing embedded FFmpeg file: $required_file" >&2
+              exit 1
+            fi
+          done
+          lipo -archs "$RUNTIME_PATH/ffmpeg" | grep -qw arm64
+          echo "Verified embedded macOS FFmpeg runtime and compliance files."
+      - name: Stage macOS installer
+        run: |
+          mkdir -p artifact
           cp release/*.dmg artifact/
-          cp media-runtime/current/FFMPEG-BUILD-CONFIG.txt "artifact/compliance/macos-${{ matrix.arch }}-FFMPEG-BUILD-CONFIG.txt"
       - uses: actions/upload-artifact@v7
         with:
-          name: macos-${{ matrix.arch }}-installer
+          name: macos-arm64-installer
           path: artifact/
           if-no-files-found: error
 
@@ -235,22 +244,13 @@ jobs:
       - build-macos
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
           path: release
           merge-multiple: true
-      - name: Attach corresponding FFmpeg source and compliance material
-        run: |
-          source scripts/ffmpeg-runtime.env
-          mkdir -p release/compliance
-          curl --fail --location --retry 3 "$FFMPEG_SOURCE_URL" --output "release/compliance/ffmpeg-${FFMPEG_VERSION}.tar.xz"
-          printf '%s  %s\n' "$FFMPEG_SHA256" "release/compliance/ffmpeg-${FFMPEG_VERSION}.tar.xz" | sha256sum -c -
-          cp scripts/build-ffmpeg-runtime.sh scripts/ffmpeg-runtime.env THIRD_PARTY_NOTICES.md release/compliance/
       - uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true
           files: |
             release/*.exe
             release/*.dmg
-            release/compliance/*
