@@ -76,7 +76,7 @@ export const TimelineToolbar = memo(function TimelineToolbar({ mode, onMode, can
       <ToolButton icon="crop" label="裁剪画面" disabled={!hasSelection} onClick={() => onAction("crop")} />
       <i className="toolbar-divider" />
       <ToolButton icon="extend" label="智能延长（即将推出）" onClick={() => onAction("smart-extend")} />
-      <ToolButton icon="talk" label="智能剪口播：自动剪掉停顿" disabled={!hasSelection} onClick={() => onAction("smart-talk")} />
+      <ToolButton icon="talk" label="智能剪口播：审阅并剪掉语气词、停顿和重复" disabled={!hasSelection} onClick={() => onAction("smart-talk")} />
       <ToolButton icon="scenes" label="智能镜头分割" disabled={!selectionIsVideo} onClick={() => onAction("smart-scenes")} />
       <ToolButton icon="rough" label="智能粗剪（即将推出）" onClick={() => onAction("smart-rough")} />
       <button className={`record-button${recording !== "idle" ? " live" : ""}`} title={recording === "recording" ? "停止录音" : "录音（倒数 3 秒）"} onClick={() => onAction("record")}><Icon name="mic" />{recording === "recording" ? <span>录音中</span> : typeof recording === "number" ? <span>{recording}</span> : null}</button>

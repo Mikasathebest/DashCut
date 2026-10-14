@@ -27,6 +27,7 @@ async function transcribeLocal(request, options) {
       "--model-root", options.modelsPath,
       // Only sent when set, so runtimes built before --hotwords existed keep working.
       ...(hotwords ? ["--hotwords", hotwords] : []),
+      ...(request.verbatim ? ["--verbatim"] : []),
     ], options, { onProgress: report });
     results.push({ clipId: clip.id, ...parsed });
   }

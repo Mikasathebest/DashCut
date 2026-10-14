@@ -81,3 +81,25 @@ test("deleting selected transcript words is a ripple cut with captions trimmed",
   assert.ok(text.startsWith("大家好嗯我们聊聊"), text);
   near(cut.subtitles[0].end, 2.6 - 0.7);
 });
+
+test("sentences split on end punctuation and long gaps even when the recogniser merged them", async () => {
+  const { deriveSentences } = await import("../app/editor/transcript.ts");
+  const spoken = [w(0, 0.3, "这期"), w(0.3, 0.6, "视频。"), w(0.7, 1.0, "这期"), w(1.0, 1.3, "视频"), w(2.5, 2.8, "很"), w(2.8, 3.0, "重要")];
+  const sentences = deriveSentences(spoken);
+  assert.equal(sentences.length, 3);
+  near(sentences[0].start, 0);
+  near(sentences[1].start, 0.7);
+  near(sentences[2].start, 2.5);
+});
+
+test("doubled single Chinese characters are grammatical, longer repeats are stutters", () => {
+  let project = createProject();
+  const main = mainTrack(project).id;
+  project = placeClip(project, createClip(asset("v", 6), main, 0), main, 0, on);
+  const spoken = [w(0, 0.2, "聊"), w(0.2, 0.4, "聊"), w(0.5, 0.6, "我"), w(0.6, 0.7, "我"), w(0.7, 0.8, "我"), w(0.8, 1.0, "觉得"), w(1.1, 1.3, "the"), w(1.3, 1.5, "the"), w(1.5, 1.8, "point")];
+  project = { ...project, transcripts: { v: { language: "zh", source: "local", words: spoken, sentences: [{ start: 0, end: 2 }] } } };
+  const stutters = analyzeCleanCut(project, defaultCleanCutSettings).filter((item) => item.kind === "stutter");
+  assert.deepEqual(stutters.map((item) => item.label), ["我…我…我", "the…the"]);
+  near(stutters[0].sourceStart, 0.5);
+  near(stutters[0].sourceEnd, 0.7);
+});

@@ -155,6 +155,7 @@ declare global {
         device: "cpu" | "cuda";
         computeType: string;
         hotwords?: string;
+        verbatim?: boolean;
       }): Promise<{
         model: string;
         device: string;

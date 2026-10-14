@@ -62,6 +62,12 @@ Windows x64 releases produce an unsigned one-click `.exe` without credentials; W
 4. Select a clip to edit it in the right-hand panel: picture (scale, position, rotation, opacity, mirror, crop), audio (volume, fades, effects), speed, in/out animations, colour adjustment and AI effects. Preview and export use the same settings.
 5. Click the cover tile at the left of the main track to design a 1280 × 720 thumbnail.
 
+### Edit by transcript and clean up talking-head takes
+
+1. Open the **Transcript** tab and click **Recognise transcript**. Add names, brands or jargon under **Vocabulary** in the captions tab so the local model spells them correctly.
+2. Select words by clicking, dragging or shift-clicking, then press ⌫. The matching video, audio and captions are cut and the timeline closes the gap. It is one undo step.
+3. **Smart clean cut**, in the transcript tab or the toolbar, lists filler words (嗯/啊/um/uh), stutters, long pauses and abandoned retakes. Fillers that are often real words (那个/就是/like/so) are listed but left unchecked. Review the list, adjust the pause threshold or filler lists, then apply the checked items. Clips without a transcript fall back to silence detection.
+
 ### Save, reopen and recover projects
 
 - **File → Save** (⌘S) writes a `.dashcut` project file. Media is referenced, not copied: paths are stored relative to the project file, so moving the project folder together with its media keeps working.

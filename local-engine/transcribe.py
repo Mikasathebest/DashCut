@@ -16,6 +16,7 @@ from faster_whisper import WhisperModel, download_model
 
 
 SUPPORTED_MODELS = ("small", "medium", "large-v3", "turbo")
+VERBATIM_PROMPT = "嗯，那个，我我我觉得……啊，就是说，呃，这个。Um, uh, I I think, like, you know."
 
 
 def model_path(model_root: str, model: str) -> str:
@@ -37,6 +38,7 @@ def main() -> int:
     parser.add_argument("--download-model", action="store_true")
     parser.add_argument("--runtime-info", action="store_true")
     parser.add_argument("--hotwords", default="", help="Comma/space separated names and terms to bias recognition")
+    parser.add_argument("--verbatim", action="store_true", help="Keep hesitations and repeats for transcript editing")
     args = parser.parse_args()
 
     if args.runtime_info:
@@ -86,6 +88,9 @@ def main() -> int:
         vad_filter=True,
         word_timestamps=True,
         hotwords=args.hotwords.strip() or None,
+        # Whisper tends to tidy speech; a disfluent prompt nudges it to keep fillers and false starts.
+        initial_prompt=VERBATIM_PROMPT if args.verbatim else None,
+        condition_on_previous_text=not args.verbatim,
     )
     result = {
         "language": info.language,

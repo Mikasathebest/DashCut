@@ -7,15 +7,18 @@ import { buildFilmstrip, buildThumbnail, captureFrame, probeFile } from "./edito
 import { buildDocument, EditorState, migrateDocument, ProjectDocument, readDocument } from "./editor/project-file";
 import {
   addTrack, Asset, Clip, clipAt, clipDuration, clipEnd, createClip, defaultClipSettings, deleteClips, EditOptions, freezeFrame, hasRoom,
-  mainTrack, placeClip, Project, projectDuration, pruneTracks, replaceWithRanges, sourceRangeToTimeline, sourceTimeAt, splitAtSourceTimes, splitClip,
-  Subtitle, toComposition, trackClips, trimAt, uid, updateClip, createProject,
+  cutSourceRanges, mainTrack, placeClip, Project, projectDuration, pruneTracks, sourceRangeToTimeline, sourceTimeAt, splitAtSourceTimes, splitClip,
+  Subtitle, TimedWord, toComposition, trackClips, Transcript, trimAt, uid, updateClip, createProject,
 } from "./editor/model";
 import { defaultSubtitleStyle, normalizeSubtitleStyle, retimeSubtitle, shiftSubtitles, SubtitleStyle } from "./editor/captions";
 import { CaptionStyleEditor, CaptionTimingBar } from "./editor/CaptionTools";
+import { CleanCutReview } from "./editor/CleanCutReview";
 import { Preview } from "./editor/Preview";
+import { TranscriptPanel } from "./editor/TranscriptPanel";
+import { analyzeCleanCut, CleanCutItem, CleanCutSettings, defaultCleanCutSettings, deriveSentences, silenceItems, timelineTranscript, TranscriptWord, wordsToCuts } from "./editor/transcript";
 import { clampZoom, DropTarget, formatClock, Timeline, TimelineMode, TimelineSettings, TimelineToolbar, Toggles, ToolbarAction } from "./editor/Timeline";
 
-type LeftTab = "media" | "subtitles";
+type LeftTab = "media" | "transcript" | "subtitles";
 type MediaFilter = "all" | "video" | "image" | "audio";
 type RecognitionEngine = "cloud" | "local";
 type History = { past: Project[]; present: Project; future: Project[]; key: string; at: number };
@@ -28,6 +31,18 @@ function savedAiSettings() {
     return { baseUrl: typeof saved.baseUrl === "string" ? saved.baseUrl : "", model: typeof saved.model === "string" ? saved.model : "" };
   } catch { return { baseUrl: "", model: "" }; }
 }
+// Vocabulary and clean-cut preferences carry over between projects.
+const editingSettingsKey = "dashcut.editing-settings";
+function savedEditingSettings(): { hotwords: string; cleanCut: CleanCutSettings } {
+  try {
+    const saved = JSON.parse(localStorage.getItem(editingSettingsKey) || "{}");
+    return {
+      hotwords: typeof saved.hotwords === "string" ? saved.hotwords : "",
+      cleanCut: { ...defaultCleanCutSettings, ...saved.cleanCut, kinds: { ...defaultCleanCutSettings.kinds, ...saved.cleanCut?.kinds } },
+    };
+  } catch { return { hotwords: "", cleanCut: defaultCleanCutSettings }; }
+}
+
 const kindLabels: Record<Asset["kind"], string> = { video: "视频", image: "图片", gif: "动图", audio: "音频" };
 const freezeLength = 3;
 
@@ -105,6 +120,8 @@ export default function Home() {
   const [captionProgress, setCaptionProgress] = useState<{ progress: number; stage: string } | null>(null);
   const [selectedSubtitle, setSelectedSubtitle] = useState<number | null>(null);
   const [hotwords, setHotwords] = useState("");
+  const [cleanCutSettings, setCleanCutSettings] = useState<CleanCutSettings>(defaultCleanCutSettings);
+  const [cleanCut, setCleanCut] = useState<{ clipIds?: string[]; scope: string; silences: CleanCutItem[] } | null>(null);
   const [autoTranslate, setAutoTranslate] = useState(true);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -119,6 +136,9 @@ export default function Home() {
   const primaryAsset = primaryClip ? assetMap.get(primaryClip.assetId) ?? null : null;
   const previewTime = !playing && toggles.previewAxis && hoverTime !== null ? hoverTime : current;
   const usedAssets = useMemo(() => new Set(project.clips.map((clip) => clip.assetId)), [project.clips]);
+  const transcriptBlocks = useMemo(() => timelineTranscript(project), [project]);
+  const flaggedWords = useMemo(() => analyzeCleanCut(project, cleanCutSettings), [cleanCutSettings, project]);
+  const cleanCutItems = useMemo(() => cleanCut ? [...analyzeCleanCut(project, cleanCutSettings, cleanCut.clipIds), ...cleanCut.silences].sort((a, b) => a.start - b.start) : [], [cleanCut, cleanCutSettings, project]);
 
   /* ------------------------------------------------------------ history */
 
@@ -156,6 +176,19 @@ export default function Home() {
   }, [aiConfig.baseUrl, aiConfig.model]);
 
   useEffect(() => window.dashCutDesktop?.onCaptionProgress?.((value) => setCaptionProgress(value)), []);
+
+  useEffect(() => {
+    const saved = savedEditingSettings();
+    // Restored after mount so server and client render the same initial markup.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setHotwords(saved.hotwords);
+    setCleanCutSettings(saved.cleanCut);
+  }, []);
+
+  useEffect(() => {
+    try { localStorage.setItem(editingSettingsKey, JSON.stringify({ hotwords, cleanCut: cleanCutSettings })); }
+    catch { /* storage unavailable: settings last for this session only */ }
+  }, [cleanCutSettings, hotwords]);
 
   /* ------------------------------------------------------------ playback clock */
 
@@ -353,26 +386,45 @@ export default function Home() {
     commit(selectedClips.reduce((value, clip) => updateClip(value, clip.id, patch(clip), options), project), key);
   }
 
+  /** Opens the clean-cut review for the selected clips, or for the whole timeline when nothing is selected. */
   async function smartTalk() {
-    const clip = primaryClip;
-    const asset = primaryAsset;
-    if (!clip || !asset) return setToast("请先选择一个口播视频或音频片段");
-    if (!window.dashCutDesktop) return setToast("智能剪口播仅支持桌面版");
-    if (!asset.hasAudio || clip.freezeAt !== null) return setToast("该片段没有音频，无法智能剪口播");
-    if (clip.reverse) return setToast("请先取消倒放再智能剪口播");
-    setBusy("正在分析停顿…");
-    try {
-      const { speech } = await window.dashCutDesktop.detectSpeechSegments(asset.sourcePath, { in: clip.in, out: clip.out });
-      const removed = (clip.out - clip.in) - speech.reduce((sum, range) => sum + range.end - range.start, 0);
-      if (!speech.length) return setToast("没有检测到人声");
-      if (removed < 0.2) return setToast("没有可剪掉的停顿");
-      commit((state) => replaceWithRanges(state, clip.id, speech, options));
-      setToast(`已剪掉 ${removed.toFixed(1)} 秒停顿，保留 ${speech.length} 段人声`);
-    } catch (error) {
-      setToast(error instanceof Error ? error.message : "智能剪口播失败");
-    } finally {
-      setBusy("");
+    const targets = (selectedClips.length ? selectedClips : project.clips).filter((clip) => assetMap.get(clip.assetId)?.hasAudio && clip.freezeAt === null && !clip.reverse);
+    if (!targets.length) return setToast("没有可精剪的人声片段；倒放或定格片段请先恢复");
+    const scope = selectedClips.length ? `所选 ${targets.length} 个片段` : "整个时间轴";
+    const transcribed = targets.filter((clip) => project.transcripts?.[clip.assetId]);
+    const untranscribed = targets.filter((clip) => !project.transcripts?.[clip.assetId]);
+    // Clips without a transcript fall back to FFmpeg silence detection.
+    const silences: CleanCutItem[] = [];
+    if (untranscribed.length && window.dashCutDesktop) {
+      setBusy("正在检测静音…");
+      try {
+        for (const clip of untranscribed) {
+          const asset = assetMap.get(clip.assetId)!;
+          const result = await window.dashCutDesktop.detectSpeechSegments(asset.sourcePath, { in: clip.in, out: clip.out });
+          silences.push(...silenceItems(clip, result.silences, cleanCutSettings.keepPause));
+        }
+      } catch (error) {
+        setToast(error instanceof Error ? error.message : "静音检测失败");
+      } finally {
+        setBusy("");
+      }
     }
+    const note = untranscribed.length ? (transcribed.length ? "；部分片段未识别文稿，只检测静音" : "；未识别文稿，只检测静音（识别文稿后可检测语气词和重复）") : "";
+    setCleanCut({ clipIds: selectedClips.length ? targets.map((clip) => clip.id) : undefined, scope: scope + note, silences });
+  }
+
+  function applyCleanCut(items: CleanCutItem[]) {
+    commit(cutSourceRanges(project, items.map((item) => ({ clipId: item.clipId, start: item.sourceStart, end: item.sourceEnd })), options));
+    setCleanCut(null);
+    setSelection([]);
+    setToast(`已剪掉 ${items.length} 处，共 ${items.reduce((sum, item) => sum + item.end - item.start, 0).toFixed(1)} 秒`);
+  }
+
+  function deleteTranscriptWords(words: TranscriptWord[]) {
+    if (isGenerating) return setToast("请等待识别完成后再编辑");
+    const cuts = wordsToCuts(words);
+    commit(cutSourceRanges(project, cuts, options));
+    setToast(`已删除 ${words.length} 个词，对应画面和字幕已剪掉`);
   }
 
   async function smartScenes() {
@@ -530,7 +582,7 @@ export default function Home() {
     return used.map((asset, index) => ({ asset, id: index + 1 }));
   }
 
-  function placeCaptions(sources: Array<{ asset: Asset; id: number }>, results: Array<{ clipId: number; segments: Array<{ start: number; end: number; text: string; zh?: string; en?: string; words?: Array<{ start: number; end: number; word: string }> }> }>, cloud: boolean) {
+  function placeCaptions(sources: Array<{ asset: Asset; id: number }>, results: Array<{ clipId: number; segments: Array<{ start: number; end: number; text: string; zh?: string; en?: string; words?: Array<{ start: number; end: number; word: string; probability?: number }> }> }>, cloud: boolean) {
     const generated: Subtitle[] = [];
     for (const result of results) {
       const asset = sources.find((source) => source.id === result.clipId)?.asset;
@@ -544,21 +596,41 @@ export default function Home() {
             continue;
           }
           // Clip word timestamps at cuts instead of repeating the full utterance.
-          const text = caption.words?.length ? caption.words.filter((word) => (word.start + word.end) / 2 >= range.sourceStart && (word.start + word.end) / 2 < range.sourceEnd).map((word) => word.word).join("").trim() : caption.text;
+          const inside = caption.words?.filter((word) => (word.start + word.end) / 2 >= range.sourceStart && (word.start + word.end) / 2 < range.sourceEnd) ?? [];
+          const text = caption.words?.length ? inside.map((word) => word.word).join("").trim() : caption.text;
           if (!text) continue;
           const isChinese = /[㐀-鿿]/u.test(text);
-          generated.push({ id: 0, start: range.start, end: range.end, zh: isChinese ? text : "", en: isChinese ? "" : text });
+          const words: TimedWord[] = inside.flatMap((word) => {
+            const mapped = sourceRangeToTimeline(clip, word.start, word.end);
+            return mapped ? [{ start: mapped.start, end: mapped.end, text: word.word, prob: word.probability ?? 1 }] : [];
+          });
+          generated.push({ id: 0, start: range.start, end: range.end, zh: isChinese ? text : "", en: isChinese ? "" : text, words });
         }
       }
     }
     return generated.sort((a, b) => a.start - b.start).map((item, index) => ({ ...item, id: index + 1 }));
   }
 
+  /** Keeps each asset's recognised words so the transcript survives edits, reopening and re-captioning. */
+  function buildTranscripts(sources: Array<{ asset: Asset; id: number }>, results: Array<{ clipId: number; language?: string; segments: Array<{ start: number; end: number; text: string; words?: Array<{ start: number; end: number; word: string; probability?: number }> }> }>, source: Transcript["source"]) {
+    const transcripts: Record<string, Transcript> = {};
+    for (const result of results) {
+      const asset = sources.find((item) => item.id === result.clipId)?.asset;
+      if (!asset) continue;
+      const words = result.segments.flatMap((segment) => segment.words?.length
+        ? segment.words.map((word) => ({ start: word.start, end: word.end, text: word.word, prob: word.probability ?? 1 }))
+        // Cloud results only time whole segments; spread the characters evenly as an estimate.
+        : [...segment.text].filter((char) => char.trim()).map((char, index, chars) => ({ start: segment.start + ((segment.end - segment.start) * index) / chars.length, end: segment.start + ((segment.end - segment.start) * (index + 1)) / chars.length, text: char, prob: 0.6 })));
+      transcripts[asset.id] = { language: result.language ?? "", source, words, sentences: deriveSentences(words) };
+    }
+    return transcripts;
+  }
+
   function setSubtitles(subtitles: Subtitle[], key = "") {
     commit((state) => ({ ...state, subtitles }), key);
   }
 
-  async function generateSubtitles() {
+  async function generateSubtitles(verbatim = false) {
     if (isGenerating) return;
     if (recognitionEngine === "cloud" || autoTranslate) {
       if (!window.dashCutDesktop) return setToast("云端字幕仅支持桌面版");
@@ -595,10 +667,12 @@ export default function Home() {
           device: useCuda ? "cuda" : "cpu",
           computeType: hardware.assessment.computeType,
           hotwords,
+          verbatim,
         });
         setCaptionProgress({ progress: 1, stage: "识别完成" });
         const generated = placeCaptions(sources, response.results, false);
-        setSubtitles(generated);
+        const transcripts = buildTranscripts(sources, response.results, "local");
+        commit((state) => ({ ...state, subtitles: generated, transcripts: { ...state.transcripts, ...transcripts } }));
         if (autoTranslate && generated.length) {
           setToast("本地识别完成，正在生成中英译文…");
           setCaptionProgress({ progress: 0, stage: "正在翻译" });
@@ -623,7 +697,9 @@ export default function Home() {
     setCaptionProgress({ progress: 0, stage: "正在提取音轨" });
     try {
       const response = await window.dashCutDesktop.transcribeCloud({ config: aiConfig, clips: sources.map((source) => ({ id: source.id, path: source.asset.sourcePath })) });
-      setSubtitles(placeCaptions(sources, response.results, true));
+      const transcripts = buildTranscripts(sources, response.results.map((result) => ({ ...result, segments: result.segments.map((segment) => ({ ...segment, text: segment.zh || segment.text })) })), "cloud");
+      const generated = placeCaptions(sources, response.results, true);
+      commit((state) => ({ ...state, subtitles: generated, transcripts: { ...state.transcripts, ...transcripts } }));
       setToast(response.failedChunks
         ? `云端字幕完成，但有 ${response.failedChunks}/${response.totalChunks} 段识别失败，可重试或改用本地识别`
         : "云端双语字幕完成，时间为模型估算；如整体偏早或偏晚，可用“时间偏移”一键校准");
@@ -1057,7 +1133,7 @@ export default function Home() {
       <button className="ghost-action" disabled={isGenerating || !project.subtitles.length} onClick={() => void translateExistingSubtitles()}>翻译当前字幕 · 保留时间戳</button>
     </details>
     {recognitionEngine === "local" && <label className="hotwords-field">专有名词<input value={hotwords} disabled={isGenerating} placeholder="人名、品牌、术语，空格分隔" onChange={(event) => setHotwords(event.target.value)} /></label>}
-    <button className={`generate-button${isGenerating ? " running" : ""}`} onClick={generateSubtitles} disabled={isGenerating}>
+    <button className={`generate-button${isGenerating ? " running" : ""}`} onClick={() => void generateSubtitles()} disabled={isGenerating}>
       <span>{isGenerating ? "◌" : "✦"}</span>
       <strong>{isGenerating ? `正在识别 ${percent}%` : "识别字幕"}</strong>
       <small>{isGenerating ? captionProgress?.stage || "正在准备" : "普通话 / English · 自动断句"}</small>
@@ -1103,8 +1179,8 @@ export default function Home() {
 
     <section className="workspace">
       <aside className="side-panel">
-        <nav className="panel-tabs"><button className={leftTab === "media" ? "active" : ""} onClick={() => setLeftTab("media")}><Icon name="film" size={14} />素材</button><button className={leftTab === "subtitles" ? "active" : ""} onClick={() => setLeftTab("subtitles")}><b>字</b>自动字幕</button></nav>
-        <div className="panel-scroll">{leftTab === "media" ? mediaPanel : subtitlesPanel}</div>
+        <nav className="panel-tabs"><button className={leftTab === "media" ? "active" : ""} onClick={() => setLeftTab("media")}><Icon name="film" size={14} />素材</button><button className={leftTab === "transcript" ? "active" : ""} onClick={() => setLeftTab("transcript")}><Icon name="talk" size={14} />文稿</button><button className={leftTab === "subtitles" ? "active" : ""} onClick={() => setLeftTab("subtitles")}><b>字</b>自动字幕</button></nav>
+        <div className="panel-scroll">{leftTab === "media" ? mediaPanel : leftTab === "transcript" ? <TranscriptPanel blocks={transcriptBlocks} time={current} flagged={flaggedWords} busy={isGenerating} canTranscribe={captionSources().length > 0} onSeek={seek} onDelete={deleteTranscriptWords} onTranscribe={() => void generateSubtitles(true)} onCleanCut={() => void smartTalk()} /> : subtitlesPanel}</div>
       </aside>
 
       <section className="stage">
@@ -1189,6 +1265,8 @@ export default function Home() {
         <button className="ghost-action" onClick={() => setMissingAssets([])}>稍后处理</button>
       </div>
     </section></div>}
+
+    {cleanCut && <CleanCutReview items={cleanCutItems} settings={cleanCutSettings} scope={cleanCut.scope} onSettings={setCleanCutSettings} onSeek={seek} onApply={applyCleanCut} onClose={() => setCleanCut(null)} />}
 
     {toast && <div className="toast"><span>✓</span>{toast}</div>}
   </main>;

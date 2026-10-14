@@ -1,6 +1,7 @@
 // Transcript view of the timeline and "clean cut" analysis (fillers, pauses, repeated takes). Pure.
 import { clipEnd, sourceRangeToTimeline, trackClips } from "./model.ts";
 import type { Clip, Project, TimedWord } from "./model.ts";
+export type { TimedWord };
 
 export type TranscriptWord = TimedWord & { clipId: string; index: number; sourceStart: number; sourceEnd: number; sentence: number };
 export type TranscriptBlock = { clipId: string; assetId: string; start: number; end: number; words: TranscriptWord[] };
@@ -133,7 +134,14 @@ export function analyzeCleanCut(project: Project, settings: CleanCutSettings, cl
 
     if (settings.kinds.stutter) {
       for (let index = 1; index < tokens.length; index += 1) {
-        if (tokens[index] && tokens[index] === tokens[index - 1]) push(item("stutter", `${words[index - 1].text.trim()}…${words[index].text.trim()}`, clip, words[index - 1].start, words[index].start, true));
+        if (!tokens[index] || tokens[index] !== tokens[index - 1] || tokens[index] === tokens[index + 1]) continue;
+        // Walk back over the whole run of repeats and keep only the last one.
+        let first = index - 1;
+        while (first > 0 && tokens[first - 1] === tokens[index]) first -= 1;
+        const run = index - first + 1;
+        // Doubled single Chinese characters are usually grammatical (看看, 聊聊, 试试); flag only 3+.
+        if (/^\p{Script=Han}$/u.test(tokens[index]) && run < 3) continue;
+        push(item("stutter", Array.from({ length: run }, () => words[index].text.trim()).join("…"), clip, words[first].start, words[index].start, true));
       }
     }
 
@@ -178,4 +186,21 @@ export function wordsToCuts(words: TranscriptWord[]) {
     else cuts.push({ clipId: word.clipId, start: word.sourceStart, end: word.sourceEnd });
   }
   return cuts;
+}
+
+/** Sentence spans from word punctuation and pauses; recogniser segments can merge several sentences. */
+export function deriveSentences(words: TimedWord[], gap = 0.6) {
+  const sentences: Array<{ start: number; end: number }> = [];
+  let start: number | null = null;
+  words.forEach((word, index) => {
+    if (start === null) start = word.start;
+    const next = words[index + 1];
+    const ends = /[。！？!?.…]\s*$/u.test(word.text) || !next || next.start - word.end > gap;
+    if (ends) {
+      // Extend to just before the next word so midpoints never fall between sentences.
+      sentences.push({ start, end: next ? Math.max(word.end, next.start - 0.001) : word.end + 0.001 });
+      start = null;
+    }
+  });
+  return sentences;
 }
