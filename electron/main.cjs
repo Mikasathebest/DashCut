@@ -7,6 +7,7 @@ const { getHardwareProfile } = require("./hardware.cjs");
 const { transcribeLocal } = require("./local-transcription.cjs");
 const { getModels, getRuntimeStatus, installModel, removeModel } = require("./model-manager.cjs");
 const { exportVideo } = require("./video-export.cjs");
+const { listHubModels, translateSubtitles, transcribeHub } = require("./AI API.cjs");
 
 let desktopServer;
 
@@ -43,6 +44,11 @@ ipcMain.handle("transcription:local", (_event, request) => {
   const options = localAiOptions();
   return transcribeLocal(request, { ...options, getRuntimeStatus: () => getRuntimeStatus(options) });
 });
+ipcMain.handle("hub:models", (_event, config) => listHubModels(config));
+ipcMain.handle("hub:translate", (_event, request) => translateSubtitles(request));
+ipcMain.handle("hub:transcribe", (_event, request) => transcribeHub(request, {
+  tempPath: app.getPath("temp"), ffmpegPath: mediaRuntimePath(),
+}));
 ipcMain.handle("export:video", async (event, request) => {
   const result = await dialog.showSaveDialog({
     title: "导出视频",

@@ -17,7 +17,7 @@ Highlights:
 - Bilibili and YouTube export presets with 30 / 60 FPS choices
 - Unsigned Windows x64 one-click `.exe` releases and one macOS Apple Silicon `.dmg`; Apple credentials automatically enable signing and notarization
 
-> Current status: local source-language transcription is implemented. The cloud provider and automatic Chinese ↔ English translation are not configured yet; the second-language caption can be edited manually in the current release.
+> Bilingual subtitles: local Whisper now combines with AI API translation to produce Chinese and English captions while preserving recognition timestamps. Gemini cloud audio recognition is also available with estimated timing. See the [tested models, speed, cost and setup guide](docs/AI_API.md).
 
 ## 2. Installation
 
@@ -68,7 +68,7 @@ Windows x64 releases produce an unsigned one-click `.exe` without credentials; W
 3. Click **Download and install**. Nothing is downloaded before this explicit action.
 4. Import the clips, select the subtitle view (**中文**, **English**, or **双语**), then click **Generate captions**.
 5. `faster-whisper` detects each clip's spoken language. Chinese recognition is written to the Chinese field; English recognition is written to the English field. Review each line and correct names or punctuation before export.
-6. For a bilingual layout today, enter the translated second line manually. Automatic Chinese ↔ English translation will be enabled after a cloud/local translation provider is integrated.
+6. For automatic bilingual captions, enter your AI API API key and enable automatic translation. Qwen3 Next is the default translator; Gemini 3.5 Flash is a tested alternative. Disable automatic translation for offline source-language recognition. Both caption lines remain editable.
 
 ![DashCut local AI hardware check and model selector](docs/images/dashcut-local-model.png)
 

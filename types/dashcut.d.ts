@@ -1,6 +1,9 @@
 export {};
 
 declare global {
+  type HubConfig = { baseUrl: string; apiKey: string; model: string };
+  type HubModel = { id: string; mode: string; audioTested: boolean };
+  type TimedSubtitle = { id: number; start: number; end: number; zh: string; en: string };
   type HardwareTier = "unsupported" | "minimum" | "recommended";
 
   interface HardwareProfile {
@@ -36,6 +39,13 @@ declare global {
       platform: string;
       version: string;
       getFilePath(file: File): string;
+      listHubModels(config: HubConfig): Promise<HubModel[]>;
+      translateSubtitles(request: { config: HubConfig; subtitles: TimedSubtitle[] }): Promise<TimedSubtitle[]>;
+      transcribeHub(request: { config: HubConfig; clips: Array<{ id: number; path: string }> }): Promise<{
+        model: string;
+        timing: "estimated";
+        results: Array<{ clipId: number; language: string; segments: Array<{ start: number; end: number; text: string; zh: string; en: string }> }>;
+      }>;
       getHardwareProfile(): Promise<HardwareProfile>;
       getLocalModels(): Promise<LocalModelInfo[]>;
       installLocalModel(model: string): Promise<{ model: string; sizeBytes?: number; alreadyInstalled?: boolean }>;
@@ -65,7 +75,7 @@ declare global {
           clipId: number;
           language: string;
           languageProbability: number;
-          segments: Array<{ start: number; end: number; text: string }>;
+          segments: Array<{ start: number; end: number; text: string; words?: Array<{ start: number; end: number; word: string }> }>;
         }>;
       }>;
     };

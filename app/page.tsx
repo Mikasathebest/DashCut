@@ -88,27 +88,31 @@ export default function Home() {
   const [toast, setToast] = useState("");
   const [subtitleStyle, setSubtitleStyle] = useState<SubtitleStyle>(defaultSubtitleStyle);
   const [styleOpen, setStyleOpen] = useState(false);
-  const [recognitionEngine, setRecognitionEngine] = useState<RecognitionEngine>("cloud");
+  const [recognitionEngine, setRecognitionEngine] = useState<RecognitionEngine>("local");
   const [hardwareOpen, setHardwareOpen] = useState(false);
   const [hardware, setHardware] = useState<HardwareProfile | null>(null);
   const [checkingHardware, setCheckingHardware] = useState(false);
   const [localModels, setLocalModels] = useState<LocalModelInfo[]>([]);
   const [selectedModel, setSelectedModel] = useState<LocalModelInfo["id"]>("small");
   const [installingModel, setInstallingModel] = useState<string>("");
+  const [hubConfig, setHubConfig] = useState<HubConfig>({ baseUrl: "https://api.example.com/v1", apiKey: "", model: "qwen3-next-80b-a3b-instruct" });
+  const [hubAudioModel, setHubAudioModel] = useState("us/gcp/google/gemini-2.5-flash");
+  const [hubModels, setHubModels] = useState<HubModel[]>([]);
+  const [loadingHubModels, setLoadingHubModels] = useState(false);
+  const [autoTranslate, setAutoTranslate] = useState(true);
   const videoRef = useRef<HTMLVideoElement>(null);
   const videoInputRef = useRef<HTMLInputElement>(null);
   const musicInputRef = useRef<HTMLInputElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   const timelineSegments = useMemo<TimelineSegment[]>(() => {
-    let cursor = 0;
-    return segments.flatMap((segment) => {
+    return segments.reduce<TimelineSegment[]>((items, segment) => {
       const clip = clips.find((item) => item.id === segment.clipId);
-      if (!clip) return [];
+      if (!clip) return items;
+      const cursor = items.at(-1)?.timelineEnd ?? 0;
       const item = { ...segment, timelineStart: cursor, timelineEnd: cursor + segment.sourceEnd - segment.sourceStart, clip };
-      cursor = item.timelineEnd;
-      return [item];
-    });
+      return [...items, item];
+    }, []);
   }, [clips, segments]);
   const duration = timelineSegments.at(-1)?.timelineEnd ?? 0;
   const activeTimelineSegment = useMemo(
@@ -179,6 +183,7 @@ export default function Home() {
   }
 
   function splitClip() {
+    if (isGenerating) return setToast("请等待字幕生成完成后再编辑时间线");
     const targetLayout = timelineSegments.find((segment) => current > segment.timelineStart + 0.3 && current < segment.timelineEnd - 0.3);
     const index = targetLayout ? segments.findIndex((segment) => segment.id === targetLayout.id) : -1;
     if (index === -1) {
@@ -198,11 +203,13 @@ export default function Home() {
   }
 
   function removeClip() {
+    if (isGenerating) return setToast("请等待字幕生成完成后再编辑时间线");
     if (segments.length <= 1) return setToast("至少保留一个视频片段");
     const selected = timelineSegments.find((segment) => segment.id === selectedSegment);
     setSegments(segments.filter((segment) => segment.id !== selectedSegment));
+    setSubtitles([]);
     setSelectedSegment(segments.find((segment) => segment.id !== selectedSegment)?.id ?? 1);
-    setToast(selected ? `已移除 ${formatTime(selected.timelineStart)} 的片段` : "片段已移除");
+    setToast(selected ? `已移除 ${formatTime(selected.timelineStart)} 的片段，请重新生成字幕` : "片段已移除，请重新生成字幕");
   }
 
   function seekFromPointer(event: React.PointerEvent<HTMLDivElement>) {
@@ -214,6 +221,11 @@ export default function Home() {
   }
 
   async function generateSubtitles() {
+    if (isGenerating) return;
+    if (recognitionEngine === "cloud" || autoTranslate) {
+      if (!window.dashCutDesktop) return setToast("AI API 字幕仅支持桌面版");
+      if (!hubConfig.apiKey.trim()) return setToast("请先填写 AI API API Key，或关闭云端翻译以离线识别");
+    }
     if (recognitionEngine === "local") {
       if (!window.dashCutDesktop) {
         setToast("本地识别仅支持桌面版");
@@ -231,7 +243,7 @@ export default function Home() {
         setHardwareOpen(true);
         return;
       }
-      const sourceClips = clips.filter((clip) => !clip.isDemo && clip.sourcePath);
+      const sourceClips = clips.filter((clip) => !clip.isDemo && clip.sourcePath && timelineSegments.some((segment) => segment.clipId === clip.id));
       if (!sourceClips.length) return setToast("请先导入本地视频");
       setIsGenerating(true);
       try {
@@ -250,20 +262,31 @@ export default function Home() {
               const sourceStart = Math.max(caption.start, timeline.sourceStart);
               const sourceEnd = Math.min(caption.end, timeline.sourceEnd);
               if (sourceEnd <= sourceStart) continue;
-              const isChinese = result.language.toLowerCase().startsWith("zh");
+              // Clip word timestamps at cuts instead of repeating the full utterance.
+              const text = caption.words?.length ? caption.words.filter((word) => (word.start + word.end) / 2 >= sourceStart && (word.start + word.end) / 2 < sourceEnd).map((word) => word.word).join("").trim() : caption.text;
+              if (!text) continue;
+              const isChinese = /[\u3400-\u9fff]/u.test(text);
               generated.push({
                 id: nextId++,
                 start: timeline.timelineStart + sourceStart - timeline.sourceStart,
                 end: timeline.timelineStart + sourceEnd - timeline.sourceStart,
-                zh: isChinese ? caption.text : "",
-                en: isChinese ? "" : caption.text,
+                zh: isChinese ? text : "",
+                en: isChinese ? "" : text,
               });
             }
           }
         }
         generated.sort((a, b) => a.start - b.start);
         setSubtitles(generated);
-        setToast(`本地识别完成 · ${response.model} / ${response.device}`);
+        if (autoTranslate && generated.length) {
+          setToast("本地识别完成，正在生成中英译文…");
+          try {
+            setSubtitles(await window.dashCutDesktop.translateSubtitles({ config: hubConfig, subtitles: generated }));
+            setToast(`双语字幕完成 · ${response.model} + AI API（保留识别时间戳）`);
+          } catch (error) {
+            setToast(`已保留原语言字幕；翻译失败：${error instanceof Error ? error.message : "请重试"}`);
+          }
+        } else setToast(`本地识别完成 · ${response.model} / ${response.device}`);
       } catch (error) {
         setToast(error instanceof Error ? error.message : "本地识别失败");
       } finally {
@@ -271,7 +294,57 @@ export default function Home() {
       }
       return;
     }
-    setToast("云端识别服务尚未配置，请选择本地模型");
+    if (!window.dashCutDesktop) return;
+    const sourceClips = clips.filter((clip) => !clip.isDemo && clip.sourcePath && timelineSegments.some((segment) => segment.clipId === clip.id));
+    if (!sourceClips.length) return setToast("请先导入本地视频");
+    setIsGenerating(true);
+    try {
+      const response = await window.dashCutDesktop.transcribeHub({ config: { ...hubConfig, model: hubAudioModel }, clips: sourceClips.map((clip) => ({ id: clip.id, path: clip.sourcePath })) });
+      const generated: Subtitle[] = [];
+      for (const timeline of timelineSegments) {
+        for (const caption of response.results.find((result) => result.clipId === timeline.clipId)?.segments ?? []) {
+          const start = Math.max(caption.start, timeline.sourceStart);
+          const end = Math.min(caption.end, timeline.sourceEnd);
+          if (end <= start) continue;
+          generated.push({ id: generated.length + 1, start: timeline.timelineStart + start - timeline.sourceStart, end: timeline.timelineStart + end - timeline.sourceStart, zh: caption.zh, en: caption.en });
+        }
+      }
+      setSubtitles(generated);
+      setToast("云端双语字幕完成，时间为模型估算，请试听校准；准确同步建议本地 Whisper + 云端翻译");
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "云端识别失败");
+    } finally { setIsGenerating(false); }
+  }
+
+  async function refreshHubModels() {
+    if (!window.dashCutDesktop) return setToast("模型查询仅支持桌面版");
+    setLoadingHubModels(true);
+    try {
+      const models = await window.dashCutDesktop.listHubModels(hubConfig);
+      setHubModels(models);
+      setToast(`已查询 ${models.length} 个模型；模型列表不保证音频支持`);
+    } catch (error) { setToast(error instanceof Error ? error.message : "模型查询失败"); }
+    finally { setLoadingHubModels(false); }
+  }
+
+  async function translateExistingSubtitles() {
+    if (!window.dashCutDesktop || isGenerating || !subtitles.length) return;
+    setIsGenerating(true);
+    try {
+      setSubtitles(await window.dashCutDesktop.translateSubtitles({ config: hubConfig, subtitles }));
+      setToast("中英译文已更新，字幕时间保持不变");
+    } catch (error) { setToast(error instanceof Error ? error.message : "翻译失败，原字幕已保留"); }
+    finally { setIsGenerating(false); }
+  }
+
+  function updateSubtitleTime(id: number, field: "start" | "end", value: number) {
+    const subtitle = subtitles.find((item) => item.id === id);
+    if (!subtitle || !Number.isFinite(value) || value < 0 || value > duration || (field === "start" ? value >= subtitle.end : value <= subtitle.start)) {
+      setToast("字幕时间必须在时间线范围内，结束时间大于开始时间");
+      return false;
+    }
+    setSubtitles((items) => items.map((item) => item.id === id ? { ...item, [field]: value } : item).sort((a, b) => a.start - b.start));
+    return true;
   }
 
   async function checkHardware() {
@@ -440,8 +513,19 @@ export default function Home() {
       <div className="panel-heading"><div><span className="eyebrow">AI CAPTIONS</span><h2>自动字幕</h2></div><span className="ai-badge">AI</span></div>
       <div className="language-switch"><button className={subtitleMode === "zh" ? "active" : ""} onClick={() => setSubtitleMode("zh")}>中文</button><button className={subtitleMode === "en" ? "active" : ""} onClick={() => setSubtitleMode("en")}>English</button><button className={subtitleMode === "both" ? "active" : ""} onClick={() => setSubtitleMode("both")}>中英双语</button></div>
       <div className="engine-switch"><button className={recognitionEngine === "cloud" ? "active" : ""} onClick={() => setRecognitionEngine("cloud")}><b>☁</b><span>云端模型<small>速度快 · 需要网络</small></span></button><button className={recognitionEngine === "local" ? "active" : ""} onClick={() => { setRecognitionEngine("local"); void checkHardware(); }}><b>⌁</b><span>本地模型<small>离线 · 保护隐私</small></span></button></div>
+      <details className="hub-settings" open>
+        <summary>AI API · 中英字幕</summary>
+        <p>准确同步推荐：本地 Whisper large-v3 + 云端翻译。云端识别时间为估算，可手动校准。</p>
+        <label>API base URL<input value={hubConfig.baseUrl} disabled={isGenerating || loadingHubModels} onChange={(event) => { setHubModels([]); setHubConfig({ ...hubConfig, baseUrl: event.target.value }); }} /></label>
+        <label>API Key（仅本次会话）<input type="password" autoComplete="off" value={hubConfig.apiKey} disabled={isGenerating || loadingHubModels} onChange={(event) => setHubConfig({ ...hubConfig, apiKey: event.target.value })} placeholder="输入密钥，不保存到磁盘" /></label>
+        <button className="ghost-action" disabled={loadingHubModels || isGenerating} onClick={() => void refreshHubModels()}>{loadingHubModels ? "正在查询…" : `查询可用模型${hubModels.length ? ` (${hubModels.length})` : ""}`}</button>
+        {recognitionEngine === "cloud" ? <label>音频识别模型<select value={hubAudioModel} disabled={isGenerating} onChange={(event) => setHubAudioModel(event.target.value)}><option value="us/gcp/google/gemini-2.5-flash">Gemini 2.5 Flash · 已测试音频</option><option value="us/gcp/google/gemini-3.5-flash">Gemini 3.5 Flash · 已测试音频</option></select></label> : <label className="hub-checkbox"><input type="checkbox" checked={autoTranslate} disabled={isGenerating} onChange={(event) => setAutoTranslate(event.target.checked)} />识别后自动生成中英译文</label>}
+        <label>翻译模型<input list="hub-models" value={hubConfig.model} disabled={isGenerating} onChange={(event) => setHubConfig({ ...hubConfig, model: event.target.value })} /><datalist id="hub-models">{hubModels.filter((model) => model.mode === "chat").map((model) => <option key={model.id} value={model.id} />)}</datalist></label>
+        <small>{recognitionEngine === "cloud" ? "生成时会将视频音轨发送到接口。" : autoTranslate ? "生成时仅将识别后的字幕文本发送到接口。" : "关闭自动翻译时，本地识别可离线运行。"}</small>
+        <button className="ghost-action" disabled={isGenerating || !subtitles.length} onClick={() => void translateExistingSubtitles()}>翻译当前字幕 · 保留时间戳</button>
+      </details>
       <button className="generate-button" onClick={generateSubtitles} disabled={isGenerating}><span>{isGenerating ? "◌" : "✦"}</span><strong>{isGenerating ? "正在识别人声…" : "重新识别字幕"}</strong><small>{isGenerating ? "正在分析音轨与语义" : "普通话 / English · 自动断句"}</small></button>
-      <div className="recognition-meta"><span><i></i> {recognitionEngine === "cloud" ? "云端模式 · 待配置接口" : hardware?.assessment.tier === "recommended" ? "本地模式 · 推荐配置" : "本地模式 · 需要检测"}</span><button onClick={() => setStyleOpen(!styleOpen)}>字幕样式 {styleOpen ? "⌃" : "⌄"}</button></div>
+      <div className="recognition-meta"><span><i></i> {recognitionEngine === "cloud" ? "Gemini 音频 · 估算时间" : hardware?.assessment.tier === "recommended" ? "本地模式 · 推荐配置" : "本地模式 · 需要检测"}</span><button onClick={() => setStyleOpen(!styleOpen)}>字幕样式 {styleOpen ? "⌃" : "⌄"}</button></div>
       {styleOpen && <div className="subtitle-style-editor">
         <div className="style-editor-title"><strong>全局字幕样式</strong><span>自动应用到全部字幕</span></div>
         <label>字体<select value={subtitleStyle.fontFamily} onChange={(event) => updateSubtitleStyle("fontFamily", event.target.value)}><option value={'Arial, "PingFang SC", "Microsoft YaHei", sans-serif'}>系统黑体</option><option value={'Georgia, "Songti SC", serif'}>中英衬线</option><option value={'"Arial Black", "PingFang SC", sans-serif'}>醒目粗体</option><option value={'"Courier New", monospace'}>等宽字体</option></select></label>
@@ -453,8 +537,9 @@ export default function Home() {
       <div className="subtitle-list">
         {subtitles.map((item) => <div className={`subtitle-row ${current >= item.start && current < item.end ? "active" : ""}`} key={item.id} onClick={() => setCurrent(item.start + 0.05)}>
           <time>{formatTime(item.start).slice(0, 5)}</time><div>
-            {subtitleMode !== "en" && <input value={item.zh} onChange={(event) => updateSubtitle(item.id, "zh", event.target.value)} />}
-            {subtitleMode !== "zh" && <input className="translation" value={item.en} onChange={(event) => updateSubtitle(item.id, "en", event.target.value)} />}
+            {subtitleMode !== "en" && <input disabled={isGenerating} value={item.zh} onChange={(event) => updateSubtitle(item.id, "zh", event.target.value)} />}
+            {subtitleMode !== "zh" && <input disabled={isGenerating} className="translation" value={item.en} onChange={(event) => updateSubtitle(item.id, "en", event.target.value)} />}
+            <div className="subtitle-timing" onClick={(event) => event.stopPropagation()}>{(["start", "end"] as const).map((field) => <label key={field}>{field === "start" ? "起" : "止"}<input key={item[field]} aria-label={`${field === "start" ? "开始" : "结束"}时间（秒）`} type="number" min="0" max={duration} step="0.01" defaultValue={item[field].toFixed(2)} disabled={isGenerating} onBlur={(event) => { if (!updateSubtitleTime(item.id, field, event.currentTarget.valueAsNumber)) event.currentTarget.value = item[field].toFixed(2); }} /></label>)}</div>
           </div><button>⋮</button>
         </div>)}
         {!subtitles.length && <p className="empty-hint">导入视频并选择识别模型后生成真实字幕。</p>}

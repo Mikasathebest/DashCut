@@ -10,6 +10,9 @@ contextBridge.exposeInMainWorld("dashCutDesktop", {
   installLocalModel: (model) => ipcRenderer.invoke("models:install", model),
   removeLocalModel: (model) => ipcRenderer.invoke("models:remove", model),
   transcribeLocal: (request) => ipcRenderer.invoke("transcription:local", request),
+  listHubModels: (config) => ipcRenderer.invoke("hub:models", config),
+  translateSubtitles: (request) => ipcRenderer.invoke("hub:translate", request),
+  transcribeHub: (request) => ipcRenderer.invoke("hub:transcribe", request),
   exportVideo: (request) => ipcRenderer.invoke("export:video", request),
   revealExport: (target) => ipcRenderer.invoke("export:reveal", target),
   onExportProgress: (callback) => {
