@@ -17,7 +17,11 @@ test("generates ASS and SRT from real subtitle data", () => {
   const subtitles = [{ start: 0, end: 1.25, zh: "你好", en: "Hello" }];
   const ass = createAss(subtitles, { fontFamily: "Arial", fontSize: 34, color: "#ffffff", outlineColor: "#000000", outlineWidth: 2 }, 1280, 720);
   assert.match(ass, /Dialogue: 0,0:00:00\.00,0:00:01\.25/);
-  assert.match(ass, /你好\\NHello/);
+  assert.match(ass, /你好\\N\{\\fs[\d.]+\\c&H00[0-9A-F]{6}&\}Hello/);
+  assert.match(createAss(subtitles, {}, 1280, 720, "zh"), /,,你好\n/);
+  assert.match(createAss(subtitles, { order: "en-first" }, 1280, 720), /,,\{\\c&H[0-9A-F]{8}&\}Hello\\N\{\\fs[\d.]+\}你好/);
+  // A background box switches libass to BorderStyle 3; position top uses alignment 8.
+  assert.match(createAss(subtitles, { backgroundOpacity: 60, position: "top", offset: 10 }, 1280, 720), /,-1,0,0,0,100,100,0,0,3,[\d.]+,0,8,80,80,72,1/);
   assert.match(createSrt(subtitles, "en"), /00:00:00,000 --> 00:00:01,250\nHello/);
 });
 

@@ -1,9 +1,37 @@
 "use client";
 
 import { CSSProperties, memo, useEffect, useRef, useState } from "react";
+import { captionLines, SubtitleMode, SubtitleStyle } from "./captions";
 import { Asset, Clip, clipEnd, evaluateVisual, evaluateVolume, Project, sourceTimeAt, Subtitle, trackClips } from "./model";
 
-export type SubtitleStyle = { fontFamily: string; fontSize: number; color: string; outlineColor: string; outlineWidth: number; backgroundOpacity: number };
+export type { SubtitleStyle } from "./captions";
+
+function rgba(hex: string, percent: number) {
+  const value = hex.replace("#", "");
+  const [r, g, b] = [0, 2, 4].map((offset) => parseInt(value.slice(offset, offset + 2), 16) || 0);
+  return `rgba(${r},${g},${b},${percent / 100})`;
+}
+
+// Mirrors createAss in electron/video-export.cjs: a background box replaces the outline, as libass BorderStyle 3 does.
+function CaptionOverlay({ subtitle, mode, style, scale }: { subtitle: Subtitle; mode: SubtitleMode; style: SubtitleStyle; scale: number }) {
+  const lines = captionLines(subtitle, mode, style);
+  if (!lines.length) return null;
+  const boxed = style.backgroundOpacity > 0;
+  const placement: CSSProperties = style.position === "top" ? { top: `${style.offset}%` } : style.position === "middle" ? { top: "50%", transform: "translate(-50%, -50%)" } : { bottom: `${style.offset}%` };
+  return <div className="caption-preview" style={{ ...placement, fontFamily: style.fontFamily }}>
+    {lines.map((line, index) => {
+      const primary = index === 0;
+      const size = style.fontSize * scale * (primary || mode !== "both" ? 1 : style.enScale / 100);
+      return <span key={line.lang} className={`caption-line${primary ? " primary" : ""}`} style={{
+        color: line.lang === "en" && mode === "both" ? style.enColor : style.color,
+        fontSize: `${Math.max(7, size)}px`,
+        WebkitTextStroke: boxed ? undefined : `${style.outlineWidth * scale}px ${style.outlineColor}`,
+        paintOrder: "stroke fill",
+        background: boxed ? rgba(style.backgroundColor, style.backgroundOpacity) : "transparent",
+      }}>{line.text}</span>;
+    })}
+  </div>;
+}
 
 type LayerProps = { clip: Clip; asset: Asset; time: number; playing: boolean; muted: boolean; frame: { width: number; height: number } };
 
@@ -104,7 +132,7 @@ type PreviewProps = {
   playing: boolean;
   muted: boolean;
   ratio: "16:9" | "9:16";
-  subtitleMode: "zh" | "en" | "both";
+  subtitleMode: SubtitleMode;
   subtitleStyle: SubtitleStyle;
   onImport: () => void;
 };
@@ -136,16 +164,6 @@ export function Preview({ project, assets, time, playing, muted, ratio, subtitle
     {layers.map(({ clip, asset, muted: layerMuted }) => <VisualLayer key={clip.id} clip={clip} asset={asset} time={time} playing={playing} muted={layerMuted} frame={frame} />)}
     {audioLayers.map(({ clip, asset, muted: layerMuted }) => <AudioLayer key={clip.id} clip={clip} asset={asset} time={time} playing={playing} muted={layerMuted} />)}
     {!project.clips.length && <button className="empty-stage" onClick={onImport}><span>＋</span><strong>导入素材开始创作</strong><small>导入后从左侧素材库拖到时间轴</small></button>}
-    {subtitle && <div className="caption-preview" style={{
-      color: subtitleStyle.color,
-      fontFamily: subtitleStyle.fontFamily,
-      fontSize: `${Math.max(9, subtitleStyle.fontSize * scale)}px`,
-      WebkitTextStroke: `${subtitleStyle.outlineWidth * scale}px ${subtitleStyle.outlineColor}`,
-      textShadow: `0 2px 6px ${subtitleStyle.outlineColor}`,
-      "--caption-bg": `rgba(0,0,0,${subtitleStyle.backgroundOpacity / 100})`,
-    } as CSSProperties}>
-      {subtitleMode !== "en" && subtitle.zh && <strong>{subtitle.zh}</strong>}
-      {subtitleMode !== "zh" && subtitle.en && <span>{subtitle.en}</span>}
-    </div>}
+    {subtitle && <CaptionOverlay subtitle={subtitle} mode={subtitleMode} style={subtitleStyle} scale={scale} />}
   </div>;
 }

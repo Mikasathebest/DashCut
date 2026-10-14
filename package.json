@@ -12,7 +12,7 @@
     "dev": "vinext dev",
     "build": "vinext build",
     "start": "vinext start",
-    "test": "npm run build && node --experimental-strip-types --no-warnings --test tests/rendered-html.test.mjs tests/video-export.test.mjs tests/AI API.test.mjs tests/timeline-model.test.mjs tests/project-file.test.mjs tests/transcript.test.mjs tests/smart-edit.test.mjs tests/composition-export.test.mjs",
+    "test": "npm run build && node --experimental-strip-types --no-warnings --test tests/rendered-html.test.mjs tests/video-export.test.mjs tests/ai-api.test.mjs tests/captions.test.mjs tests/timeline-model.test.mjs tests/project-file.test.mjs tests/transcript.test.mjs tests/smart-edit.test.mjs tests/composition-export.test.mjs",
     "desktop": "npm run build && electron .",
     "desktop:smoke": "node electron/smoke-test.mjs",
     "runtime:build": "node scripts/build-local-runtime.mjs",

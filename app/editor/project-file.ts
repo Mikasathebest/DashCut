@@ -1,10 +1,11 @@
 // Versioned on-disk project document (*.dashcut). Pure: no DOM, no fs.
+import type { SubtitleStyle } from "./captions";
 import type { Asset, Clip, Marker, Project, Subtitle, Track } from "./model";
 
 export const projectSchemaVersion = 2;
 export const projectExtension = "dashcut";
 
-export type CaptionStyle = { fontFamily: string; fontSize: number; color: string; outlineColor: string; outlineWidth: number; backgroundOpacity: number };
+export type CaptionStyle = SubtitleStyle;
 export type CaptionMode = "zh" | "en" | "both";
 export type ExportSettings = { resolution: 720 | 1080 | 2160; fps: 30 | 60; platform: "bilibili" | "youtube" };
 

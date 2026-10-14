@@ -36,6 +36,7 @@ def main() -> int:
     parser.add_argument("--model-root")
     parser.add_argument("--download-model", action="store_true")
     parser.add_argument("--runtime-info", action="store_true")
+    parser.add_argument("--hotwords", default="", help="Comma/space separated names and terms to bias recognition")
     args = parser.parse_args()
 
     if args.runtime_info:
@@ -75,6 +76,8 @@ def main() -> int:
         target,
         device=args.device,
         compute_type=args.compute_type,
+        # CTranslate2 defaults to 4 threads; use every core for CPU-only Macs.
+        cpu_threads=(os.cpu_count() or 4) if args.device == "cpu" else 0,
         local_files_only=True,
     )
     segments, info = model.transcribe(
@@ -82,6 +85,7 @@ def main() -> int:
         beam_size=5,
         vad_filter=True,
         word_timestamps=True,
+        hotwords=args.hotwords.strip() or None,
     )
     result = {
         "language": info.language,
@@ -90,6 +94,9 @@ def main() -> int:
         "segments": [],
     }
     for segment in segments:
+        # Streamed to stderr so the desktop app can show live progress; stdout stays pure JSON.
+        if info.duration:
+            print(f"PROGRESS {min(1.0, segment.end / info.duration):.4f}", file=sys.stderr, flush=True)
         result["segments"].append({
             "start": segment.start,
             "end": segment.end,

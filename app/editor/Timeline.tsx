@@ -2,7 +2,8 @@
 
 import { CSSProperties, memo, PointerEvent as ReactPointerEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "./icons";
-import { Asset, Clip, clipDuration, clipEnd, isStretchable, minClipDuration, Project, snapCandidates, snapTime, Track } from "./model";
+import { SubtitleMode } from "./captions";
+import { Asset, Clip, clipDuration, clipEnd, isStretchable, minClipDuration, Project, snapCandidates, snapTime, Subtitle, Track } from "./model";
 
 export type TimelineMode = "select" | "blade";
 export type DropTarget = string | "new-top" | "new-bottom";
@@ -10,7 +11,15 @@ export type TimelineSettings = { videoHeight: number; audioHeight: number; wavef
 export type Toggles = { magnet: boolean; snap: boolean; linkage: boolean; previewAxis: boolean };
 
 const headerWidth = 112;
-const tickSteps = [0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600];
+/** Slot before 0:00 that holds the cover, so the cover reads as the first frame of the video. */
+const leadWidth = 56;
+const origin = headerWidth + leadWidth;
+const tickSteps = [0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600];
+/** Pixels per second. The minimum fits roughly three hours into a 1000 px timeline. */
+export const MIN_ZOOM = 0.05;
+export const MAX_ZOOM = 400;
+export const clampZoom = (zoom: number) => Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom));
+const minCaptionDuration = 0.2;
 
 export function formatClock(value: number, withFrames = true) {
   const safe = Number.isFinite(value) ? Math.max(0, value) : 0;
@@ -80,7 +89,7 @@ export const TimelineToolbar = memo(function TimelineToolbar({ mode, onMode, can
       <ToolButton icon="fit" label="全局预览缩放（适应窗口）" onClick={() => onAction("fit")} />
       <i className="toolbar-divider" />
       <ToolButton icon="minus" label="缩小时间轴" onClick={() => onZoom(zoom / 1.4)} />
-      <input className="zoom-slider" type="range" min={Math.log(2)} max={Math.log(400)} step={0.01} value={Math.log(zoom)} onChange={(event) => onZoom(Math.exp(Number(event.target.value)))} aria-label="时间轴缩放" />
+      <input className="zoom-slider" type="range" min={Math.log(MIN_ZOOM)} max={Math.log(MAX_ZOOM)} step={0.01} value={Math.log(zoom)} onChange={(event) => onZoom(Math.exp(Number(event.target.value)))} aria-label="时间轴缩放" />
       <ToolButton icon="plus" label="放大时间轴" onClick={() => onZoom(zoom * 1.4)} />
       <div className="toolbar-menu">
         <ToolButton icon="more" label="轨道设置" active={menuOpen} onClick={() => setMenuOpen(!menuOpen)} />
@@ -137,7 +146,8 @@ function Filmstrip({ asset, clip, width, height }: { asset: Asset; clip: Clip; w
 type DragState =
   | { type: "move"; clipId: string; pointerX: number; originStart: number; start: number; target: DropTarget; moved: boolean }
   | { type: "trim"; clipId: string; edge: "left" | "right"; pointerX: number; patch: Partial<Clip> }
-  | { type: "scrub" };
+  | { type: "scrub" }
+  | { type: "caption"; id: number; edge: "left" | "right" | null; pointerX: number; start: number; end: number; moved: boolean };
 
 type TimelineProps = {
   project: Project;
@@ -164,6 +174,10 @@ type TimelineProps = {
   onZoom: (zoom: number) => void;
   onCover: () => void;
   onViewport: (width: number) => void;
+  subtitleMode: SubtitleMode;
+  selectedSubtitle: number | null;
+  onSelectSubtitle: (id: number | null) => void;
+  onSubtitleChange: (id: number, patch: Partial<Pick<Subtitle, "start" | "end" | "zh" | "en">>) => void;
 };
 
 export function Timeline(props: TimelineProps) {
@@ -171,6 +185,7 @@ export function Timeline(props: TimelineProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [drag, setDrag] = useState<DragState | null>(null);
   const [assetDrop, setAssetDrop] = useState<{ target: DropTarget; start: number } | null>(null);
+  const [editingCaption, setEditingCaption] = useState<number | null>(null);
   const dragRef = useRef<DragState | null>(null);
   const propsRef = useRef(props);
   // Window-level pointer handlers read the latest drag state and callbacks through refs.
@@ -181,31 +196,32 @@ export function Timeline(props: TimelineProps) {
   useEffect(() => {
     const element = scrollRef.current;
     if (!element) return;
-    const observer = new ResizeObserver(([entry]) => propsRef.current.onViewport(entry.contentRect.width - headerWidth));
+    const observer = new ResizeObserver(([entry]) => propsRef.current.onViewport(entry.contentRect.width - origin));
     observer.observe(element);
     // Pinch / ⌘-scroll zooms around the pointer like other editors.
     const onWheel = (event: WheelEvent) => {
       if (!event.ctrlKey && !event.metaKey) return;
       event.preventDefault();
       const rect = element.getBoundingClientRect();
-      const pointer = event.clientX - rect.left - headerWidth + element.scrollLeft;
+      const pointer = event.clientX - rect.left - origin + element.scrollLeft;
       const current = propsRef.current.zoom;
-      const next = Math.max(2, Math.min(400, current * Math.exp(-event.deltaY * 0.01)));
+      const next = clampZoom(current * Math.exp(-event.deltaY * 0.01));
       propsRef.current.onZoom(next);
-      requestAnimationFrame(() => { element.scrollLeft = (pointer / current) * next - (event.clientX - rect.left - headerWidth); });
+      requestAnimationFrame(() => { element.scrollLeft = (pointer / current) * next - (event.clientX - rect.left - origin); });
     };
     element.addEventListener("wheel", onWheel, { passive: false });
     return () => { observer.disconnect(); element.removeEventListener("wheel", onWheel); };
   }, []);
 
-  const contentWidth = Math.max((duration + 20) * zoom, 400);
-  const step = tickSteps.find((value) => value * zoom >= 64) ?? 600;
+  // Leave room past the end at every zoom level: 20 s when zoomed in, 200 px when zoomed out.
+  const contentWidth = Math.max((duration + 20) * zoom, duration * zoom + 200, 400);
+  const step = tickSteps.find((value) => value * zoom >= 64) ?? tickSteps.at(-1)!;
   const ticks = Array.from({ length: Math.ceil(contentWidth / zoom / step) + 1 }, (_, index) => index * step);
 
   function timeFromClientX(clientX: number) {
     const element = scrollRef.current!;
     const rect = element.getBoundingClientRect();
-    return Math.max(0, (clientX - rect.left - headerWidth + element.scrollLeft) / zoom);
+    return Math.max(0, (clientX - rect.left - origin + element.scrollLeft) / zoom);
   }
 
   function targetFromPoint(clientX: number, clientY: number): DropTarget | null {
@@ -234,6 +250,7 @@ export function Timeline(props: TimelineProps) {
       const state = dragRef.current;
       if (!state) return;
       if (state.type === "scrub") return propsRef.current.onSeek(timeFromClientX(event.clientX));
+      if (state.type === "caption") return update(dragCaption(state, event.clientX));
       const clip = project.clips.find((item) => item.id === state.clipId);
       if (!clip) return;
       const deltaTime = (event.clientX - state.pointerX) / zoom;
@@ -283,6 +300,10 @@ export function Timeline(props: TimelineProps) {
       dragRef.current = null;
       setDrag(null);
       if (!state || state.type === "scrub") return;
+      if (state.type === "caption") {
+        if (state.moved) propsRef.current.onSubtitleChange(state.id, { start: state.start, end: state.end });
+        return;
+      }
       if (state.type === "move" && state.moved) propsRef.current.onMoveClip(state.clipId, state.target, state.start);
       if (state.type === "trim" && Object.keys(state.patch).length) propsRef.current.onTrimClip(state.clipId, state.patch);
     };
@@ -345,6 +366,70 @@ export function Timeline(props: TimelineProps) {
     </div>;
   }
 
+  /* ------------------------------------------------------------ caption track */
+
+  const subtitles = project.subtitles;
+
+  // Moves or trims a caption, clamped between its neighbours so captions never overlap.
+  function dragCaption(state: Extract<DragState, { type: "caption" }>, clientX: number): DragState {
+    const index = subtitles.findIndex((item) => item.id === state.id);
+    const original = subtitles[index];
+    if (!original) return state;
+    const floor = index > 0 ? subtitles[index - 1].end : 0;
+    const ceiling = index < subtitles.length - 1 ? subtitles[index + 1].start : Infinity;
+    const delta = (clientX - state.pointerX) / zoom;
+    const moved = state.moved || Math.abs(clientX - state.pointerX) > 3;
+    if (state.edge === "left") {
+      return { ...state, moved, start: Math.max(floor, Math.min(original.end - minCaptionDuration, snapped(original.start + delta))) };
+    }
+    if (state.edge === "right") {
+      return { ...state, moved, end: Math.min(ceiling, Math.max(original.start + minCaptionDuration, snapped(original.end + delta))) };
+    }
+    const length = original.end - original.start;
+    const start = Math.max(floor, Math.min(ceiling - length, snapped(original.start + delta)));
+    return { ...state, moved, start, end: start + length };
+  }
+
+  function startCaptionPointer(event: ReactPointerEvent, subtitle: Subtitle) {
+    if (event.button !== 0 || editingCaption === subtitle.id) return;
+    event.stopPropagation();
+    props.onSelectSubtitle(subtitle.id);
+    const edge = (event.target as HTMLElement).dataset.edge as "left" | "right" | undefined;
+    if (!edge) props.onSeek(subtitle.start + 0.01);
+    beginDrag({ type: "caption", id: subtitle.id, edge: edge ?? null, pointerX: event.clientX, start: subtitle.start, end: subtitle.end, moved: false });
+  }
+
+  // Chinese and English captions share timing, so both rows move together when either is dragged.
+  function captionRow(lang: "zh" | "en") {
+    const dimmed = props.subtitleMode !== "both" && props.subtitleMode !== lang;
+    return <div key={lang} className={`timeline-row caption-track ${lang}${dimmed ? " dimmed" : ""}`} style={{ height: 30 }} title={dimmed ? "当前预览与导出未显示此语言" : undefined}>
+      <div className="track-header"><span className="track-name"><Icon name="text" size={12} />{lang === "zh" ? "中文字幕" : "English"}</span></div>
+      <i className="track-lead" />
+      <div className="track-lane" style={{ width: contentWidth }} onPointerDown={(event) => { if (event.button !== 0) return; props.onSelectSubtitle(null); props.onSeek(timeFromClientX(event.clientX)); }}>
+        {subtitles.map((subtitle) => {
+          const dragged = drag?.type === "caption" && drag.id === subtitle.id ? drag : null;
+          const start = dragged ? dragged.start : subtitle.start;
+          const end = dragged ? dragged.end : subtitle.end;
+          const width = Math.max(3, (end - start) * zoom);
+          const field = lang;
+          const selected = props.selectedSubtitle === subtitle.id;
+          return <div key={subtitle.id} className={`timeline-caption${selected ? " selected" : ""}${time >= subtitle.start && time < subtitle.end ? " live" : ""}`} style={{ left: start * zoom, width }} title={`${subtitle.zh}${subtitle.zh && subtitle.en ? "\n" : ""}${subtitle.en}\n双击编辑 · 拖动调整时间`}
+            onPointerDown={(event) => startCaptionPointer(event, subtitle)}
+            onDoubleClick={(event) => { event.stopPropagation(); setEditingCaption(subtitle.id); }}>
+            {editingCaption === subtitle.id
+              ? <input autoFocus defaultValue={subtitle[field]} aria-label="编辑字幕"
+                onPointerDown={(event) => event.stopPropagation()}
+                onKeyDown={(event) => { event.stopPropagation(); if (event.key === "Enter") event.currentTarget.blur(); if (event.key === "Escape") { event.currentTarget.value = subtitle[field]; event.currentTarget.blur(); } }}
+                onBlur={(event) => { setEditingCaption(null); if (event.currentTarget.value !== subtitle[field]) props.onSubtitleChange(subtitle.id, { [field]: event.currentTarget.value }); }} />
+              : width > 18 && <span>{subtitle[field] || (lang === "en" ? "（未翻译）" : "")}</span>}
+            {width > 10 && editingCaption !== subtitle.id && <><i className="clip-edge left" data-edge="left" /><i className="clip-edge right" data-edge="right" /></>}
+          </div>;
+        })}
+        {!subtitles.length && lang === "zh" && <span className="lane-hint">识别字幕后显示在这里，双击可编辑</span>}
+      </div>
+    </div>;
+  }
+
   const showNewZones = Boolean(draggingAssetId || (drag?.type === "move" && drag.moved));
   const movingTarget = drag?.type === "move" && drag.moved ? drag.target : null;
   const movingClip = drag?.type === "move" ? project.clips.find((clip) => clip.id === drag.clipId) : undefined;
@@ -353,16 +438,20 @@ export function Timeline(props: TimelineProps) {
     const active = assetDrop?.target === position || movingTarget === position;
     const ghostLength = ghostAsset ? ghostAsset.duration : movingClip ? clipDuration(movingClip) : 0;
     const start = assetDrop?.target === position ? assetDrop.start : drag?.type === "move" ? drag.start : 0;
-    return <div className={`timeline-row new-track${showNewZones ? " visible" : ""}${active ? " over" : ""}`} data-drop={position} onDragOver={(event) => onLaneDragOver(event, position)} onDragLeave={() => setAssetDrop(null)} onDrop={(event) => onLaneDrop(event, position)}>
-      <div className="track-header"><small>{position === "new-top" ? "拖到这里新建画中画轨" : "拖到这里新建轨道"}</small></div>
-      <div className="track-lane" style={{ width: contentWidth }}>{active && ghostLength > 0 && <i className="drop-ghost" style={{ left: start * zoom, width: ghostLength * zoom }} />}</div>
+    // The top zone is always visible as a hint; both zones grow while something is being dragged.
+    const shown = showNewZones ? " visible dragging" : position === "new-top" && project.clips.length ? " visible" : "";
+    return <div className={`timeline-row new-track${shown}${active ? " over" : ""}`} data-drop={position} onDragOver={(event) => onLaneDragOver(event, position)} onDragLeave={() => setAssetDrop(null)} onDrop={(event) => onLaneDrop(event, position)}>
+      <div className="track-header"><small>{position === "new-top" ? "＋ 新建视频轨" : "＋ 新建轨道"}</small></div>
+      <i className="track-lead" />
+      <div className="track-lane" style={{ width: contentWidth }}>{active && ghostLength > 0 ? <i className="drop-ghost" style={{ left: start * zoom, width: ghostLength * zoom }} /> : <span className="lane-hint">{position === "new-top" ? "把片段拖到这里，新建一条画中画视频轨" : "拖到这里新建轨道"}</span>}</div>
     </div>;
   }
 
   return <div className="timeline-scroll" ref={scrollRef} onPointerLeave={() => props.onHover(null)} onPointerMove={(event) => { if (toggles.previewAxis && !drag) props.onHover(timeFromClientX(event.clientX)); }}>
-    <div className="timeline-content" style={{ width: contentWidth + headerWidth }}>
+    <div className="timeline-content" style={{ width: contentWidth + origin }}>
       <div className="timeline-ruler" onPointerDown={(event) => { if (event.button !== 0) return; props.onSeek(timeFromClientX(event.clientX)); beginDrag({ type: "scrub" }); }}>
         <div className="track-header ruler-corner"><span>{formatClock(time)}</span></div>
+        <i className="track-lead" />
         <div className="ruler-lane" style={{ width: contentWidth }}>
           {ticks.map((tick) => <span key={tick} style={{ left: tick * zoom }}>{step < 1 ? `${tick.toFixed(1)}s` : formatClock(tick, false)}</span>)}
           {project.markers.map((marker) => <button key={marker.id} className="timeline-marker" style={{ left: marker.time * zoom }} title="标记（右键删除）" onPointerDown={(event) => { event.stopPropagation(); props.onSeek(marker.time); }} onContextMenu={(event) => { event.preventDefault(); props.onRemoveMarker(marker.id); }}><Icon name="marker" size={11} /></button>)}
@@ -375,7 +464,6 @@ export function Timeline(props: TimelineProps) {
         const ghostLength = ghostAsset ? ghostAsset.duration : movingClip ? clipDuration(movingClip) : 0;
         return <div key={track.id} className={`timeline-row ${track.kind}${track.main ? " main" : ""}${over ? " over" : ""}${track.hidden ? " hidden-track" : ""}`} style={{ height }} data-drop={track.id}>
           <div className="track-header">
-            {track.main && <button className="cover-button" onClick={props.onCover} title="编辑封面" style={coverImage ? { backgroundImage: `url("${coverImage}")` } : undefined}><span>封面</span></button>}
             <span className="track-name"><Icon name={track.kind === "audio" ? "music" : track.main ? "film" : "image"} size={12} />{track.main ? "主轨" : track.kind === "audio" ? "音频" : "画中画"}</span>
             <span className="track-actions">
               <button title={track.locked ? "解锁轨道" : "锁定轨道"} className={track.locked ? "on" : ""} onClick={() => props.onTrack(track.id, { locked: !track.locked })}><Icon name={track.locked ? "lock" : "unlock"} size={12} /></button>
@@ -383,6 +471,7 @@ export function Timeline(props: TimelineProps) {
               <button title={track.muted ? "取消静音" : "静音轨道"} className={track.muted ? "on" : ""} onClick={() => props.onTrack(track.id, { muted: !track.muted })}><Icon name={track.muted ? "mute" : "volume"} size={12} /></button>
             </span>
           </div>
+          <i className="track-lead">{track.main && <button className="cover-button" onClick={props.onCover} title="编辑封面" style={coverImage ? { backgroundImage: `url("${coverImage}")` } : undefined}><span>封面</span></button>}</i>
           <div className="track-lane" style={{ width: contentWidth }} onPointerDown={(event) => { if (event.button !== 0) return; props.onSelect([]); props.onSeek(timeFromClientX(event.clientX)); }} onDragOver={(event) => onLaneDragOver(event, track.id)} onDragLeave={() => setAssetDrop(null)} onDrop={(event) => onLaneDrop(event, track.id)}>
             {project.clips.filter((clip) => clip.trackId === track.id && !(drag?.type === "move" && drag.moved && drag.clipId === clip.id && drag.target !== track.id)).map((clip) => renderClip(clip, track, height))}
             {movingClip && movingTarget === track.id && movingClip.trackId !== track.id && renderClip(movingClip, track, height)}
@@ -391,9 +480,11 @@ export function Timeline(props: TimelineProps) {
           </div>
         </div>;
       })}
+      {captionRow("zh")}
+      {captionRow("en")}
       {newZone("new-bottom")}
-      <div className="timeline-playhead" style={{ left: headerWidth + time * zoom }}><i /></div>
-      {toggles.previewAxis && hoverTime !== null && !drag && <div className="timeline-hoverline" style={{ left: headerWidth + hoverTime * zoom }}><span>{formatClock(hoverTime)}</span></div>}
+      <div className="timeline-playhead" style={{ left: origin + time * zoom }}><i /></div>
+      {toggles.previewAxis && hoverTime !== null && !drag && <div className="timeline-hoverline" style={{ left: origin + hoverTime * zoom }}><span>{formatClock(hoverTime)}</span></div>}
     </div>
   </div>;
 }

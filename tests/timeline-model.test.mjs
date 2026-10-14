@@ -120,7 +120,7 @@ test("composition lists visual layers bottom to top and audio tracks separately"
   const audioTrack = project.tracks.find((track) => track.kind === "audio");
   project = placeClip(project, createClip(asset("song", "audio", 5), audioTrack.id, 0), audioTrack.id, 0, on);
   const assets = [asset("a", "video", 4), asset("pip", "image", 2), asset("song", "audio", 5)];
-  const request = toComposition(project, assets, { ratio: "9:16", resolution: 1080, fps: 30, platform: "youtube", subtitleStyle: {} });
+  const request = toComposition(project, assets, { ratio: "9:16", resolution: 1080, fps: 30, platform: "youtube", subtitleStyle: {}, subtitleMode: "both" });
   assert.deepEqual([request.width, request.height], [1080, 1920]);
   assert.deepEqual(request.visuals.map((visual) => visual.path), ["/media/a", "/media/pip"]);
   assert.deepEqual(request.audios.map((audio) => audio.path), ["/media/song"]);

@@ -108,7 +108,9 @@ function assessHardware(profile) {
   let computeType = "none";
   if (minimum) {
     tier = recommended ? "recommended" : "minimum";
-    model = recommended ? "large-v3" : "small";
+    // Without CUDA, large-v3 is slow on CPU; turbo keeps near-large accuracy at several times the speed.
+    const strongCpu = profile.memory.totalGb >= 16 && profile.cpu.logicalCores >= 8;
+    model = recommended ? "large-v3" : strongCpu ? "turbo" : "small";
     computeType = recommended ? "float16" : "int8";
   }
 

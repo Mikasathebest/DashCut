@@ -10,9 +10,9 @@ contextBridge.exposeInMainWorld("dashCutDesktop", {
   installLocalModel: (model) => ipcRenderer.invoke("models:install", model),
   removeLocalModel: (model) => ipcRenderer.invoke("models:remove", model),
   transcribeLocal: (request) => ipcRenderer.invoke("transcription:local", request),
-  listHubModels: (config) => ipcRenderer.invoke("hub:models", config),
-  translateSubtitles: (request) => ipcRenderer.invoke("hub:translate", request),
-  transcribeHub: (request) => ipcRenderer.invoke("hub:transcribe", request),
+  listAiModels: (config) => ipcRenderer.invoke("ai:models", config),
+  translateSubtitles: (request) => ipcRenderer.invoke("ai:translate", request),
+  transcribeCloud: (request) => ipcRenderer.invoke("ai:transcribe", request),
   exportVideo: (request) => ipcRenderer.invoke("export:video", request),
   revealExport: (target) => ipcRenderer.invoke("export:reveal", target),
   exportComposition: (request) => ipcRenderer.invoke("export:composition", request),
@@ -42,5 +42,10 @@ contextBridge.exposeInMainWorld("dashCutDesktop", {
     const listener = (_event, progress) => callback(progress);
     ipcRenderer.on("export:progress", listener);
     return () => ipcRenderer.removeListener("export:progress", listener);
+  },
+  onCaptionProgress: (callback) => {
+    const listener = (_event, progress) => callback(progress);
+    ipcRenderer.on("captions:progress", listener);
+    return () => ipcRenderer.removeListener("captions:progress", listener);
   },
 });

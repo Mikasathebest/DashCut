@@ -1,0 +1,65 @@
+/* Caption recognition progress, caption styling/timing tools and the caption timeline tracks. */
+.generate-button.running { overflow: hidden; }
+.caption-progress { display: block; height: 4px; margin-top: 7px; border-radius: 2px; background: #252c3b; overflow: hidden; }
+.caption-progress > i { display: block; height: 100%; border-radius: 2px; background: linear-gradient(90deg, #6d8dff, #58d5d1); transition: width .25s ease-out; }
+.generate-button strong { font-variant-numeric: tabular-nums; }
+
+.model-picker { display: flex; gap: 6px; }
+.model-picker input { flex: 1; }
+.model-picker .ghost-action { flex: none; padding: 0 9px; border: 1px solid #343c4c; border-radius: 4px; background: #171c26; color: #b8c2d6; font-size: 9px; }
+.hotwords-field { display: flex; flex-direction: column; gap: 5px; margin: 0 0 9px; color: #8d95a4; font-size: 9px; }
+.hotwords-field input { padding: 7px; border: 1px solid #2f3746; border-radius: 5px; background: #10141b; color: #dfe3ea; font-size: 10px; }
+
+.style-presets { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
+.style-presets button, .style-segment button, .caption-timing-buttons button, .caption-timing-custom button { border: 1px solid #323a48; border-radius: 5px; background: #181d27; color: #c5ccd8; font-size: 8px; padding: 6px 2px; }
+.style-presets button:hover, .caption-timing-buttons button:hover:not(:disabled) { border-color: #5d77d6; }
+.style-section { color: #cdd3dd; font-size: 8px; margin-top: 2px; }
+.style-segment { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 3px; padding: 2px; border: 1px solid #2a303c; border-radius: 6px; background: #0c0f15; }
+.style-segment button { border-color: transparent; background: transparent; }
+.style-segment button.active { background: #26304a; border-color: #4e64b5; color: #fff; }
+.style-segment button:disabled { opacity: .4; }
+.subtitle-style-editor .style-color-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.subtitle-style-editor .style-color-grid label { display: flex; flex-direction: column; gap: 4px; align-items: stretch; }
+.subtitle-style-editor .style-color-grid input { width: 100%; height: 24px; padding: 0; border: 1px solid #333a47; border-radius: 4px; background: transparent; }
+.style-note { color: #7d8698; font-size: 8px; }
+
+.caption-timing { margin: 0 0 9px; padding: 10px; border: 1px solid #2c3442; border-radius: 8px; background: #11151d; display: flex; flex-direction: column; gap: 8px; }
+.caption-timing-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.caption-timing-head strong { font-size: 9px; }
+.caption-timing-head .style-segment { flex: 1; max-width: 170px; }
+.caption-timing-buttons { display: grid; grid-template-columns: repeat(6, 1fr); gap: 4px; }
+.caption-timing-buttons button { font-variant-numeric: tabular-nums; }
+.caption-timing-custom { display: grid; grid-template-columns: 1fr auto auto; gap: 4px; }
+.caption-timing-custom input { min-width: 0; padding: 5px 7px; border: 1px solid #323a48; border-radius: 5px; background: #0c0f15; color: #dfe3ea; font-size: 9px; }
+.caption-timing-custom button { padding: 5px 10px; }
+.caption-timing small { color: #6f7889; font-size: 8px; line-height: 1.5; }
+.caption-timing button:disabled { opacity: .4; cursor: not-allowed; }
+.subtitle-row.selected { background: #1d2436; box-shadow: inset 0 0 0 1px #3f5299; }
+
+/* Captions in the preview: per-line styling comes from inline styles. */
+.video-frame .caption-preview { bottom: auto; gap: .15em; text-shadow: none; }
+.caption-preview .caption-line { margin: 0; padding: .08em .35em; border-radius: 3px; line-height: 1.3; font-weight: 700; white-space: pre-wrap; }
+
+/* Timeline: cover slot before 0:00 */
+.track-lead { flex: none; width: 56px; display: flex; align-items: center; justify-content: center; border-right: 1px dashed #232835; font-style: normal; }
+.timeline-ruler .track-lead { border-right-color: transparent; }
+.track-lead .cover-button { width: 44px; height: calc(100% - 8px); max-height: 54px; }
+
+/* Timeline: caption tracks */
+.caption-track .track-name small { margin-left: 4px; color: #6c7586; }
+.caption-track .track-lane { background: repeating-linear-gradient(90deg, transparent 0 39px, rgba(255,255,255,.015) 39px 40px); }
+.caption-track.dimmed .track-lane { opacity: .45; }
+.timeline-caption { position: absolute; top: 3px; bottom: 3px; display: flex; align-items: center; overflow: hidden; border: 1px solid #7a6531; border-radius: 4px; background: #3b321b; color: #f4e3b1; font-size: 9px; cursor: grab; }
+.caption-track.en .timeline-caption { border-color: #2f6a68; background: #18322f; color: #b9efe9; }
+.timeline-caption span { padding: 0 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; }
+.timeline-caption.live { filter: brightness(1.25); }
+.timeline-caption.selected { box-shadow: 0 0 0 1px #fff; }
+.timeline-caption.selected .clip-edge { background: rgba(255,255,255,.75); }
+.timeline-caption input { width: 100%; height: 100%; padding: 0 6px; border: 0; outline: 0; background: #0f131b; color: #fff; font-size: 9px; }
+
+/* Timeline: new video track zone stays visible as a hint and grows while dragging */
+.new-track.visible { height: 20px; }
+.new-track.visible.dragging { height: 40px; }
+.new-track .lane-hint { font-size: 8px; color: #485164; }
+.new-track.dragging .track-lane { background: rgba(109, 141, 255, .05); outline: 1px dashed #36457a; outline-offset: -3px; }
+.new-track.dragging .lane-hint { color: #7d93dc; }

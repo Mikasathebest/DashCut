@@ -387,7 +387,7 @@ export function canvasSize(ratio: "16:9" | "9:16", resolution: 720 | 1080 | 2160
 }
 
 /** Flattens the project into the exporter contract (visual layers bottom → top). */
-export function toComposition(project: Project, assets: Asset[], settings: { ratio: "16:9" | "9:16"; resolution: 720 | 1080 | 2160; fps: 30 | 60; platform: "bilibili" | "youtube"; subtitleStyle: Record<string, string | number> }): CompositionRequest {
+export function toComposition(project: Project, assets: Asset[], settings: { ratio: "16:9" | "9:16"; resolution: 720 | 1080 | 2160; fps: 30 | 60; platform: "bilibili" | "youtube"; subtitleStyle: Record<string, string | number>; subtitleMode: "zh" | "en" | "both" }): CompositionRequest {
   const byId = new Map(assets.map((asset) => [asset.id, asset]));
   const { width, height } = canvasSize(settings.ratio, settings.resolution);
   const videoTracks = project.tracks.filter((track) => track.kind === "video" && !track.hidden).reverse();
@@ -421,7 +421,7 @@ export function toComposition(project: Project, assets: Asset[], settings: { rat
     if (!asset || !asset.hasAudio) return [];
     return [{ path: asset.sourcePath, start: clip.start, in: clip.in, out: clip.out, speed: clip.speed, audio: clip.audio }];
   }));
-  return { width, height, fps: settings.fps, platform: settings.platform, duration: projectDuration(project), visuals, audios, subtitles: project.subtitles, subtitleStyle: settings.subtitleStyle };
+  return { width, height, fps: settings.fps, platform: settings.platform, duration: projectDuration(project), visuals, audios, subtitles: project.subtitles, subtitleStyle: settings.subtitleStyle, subtitleMode: settings.subtitleMode };
 }
 
 /** Maps a source-time range of a clip's asset onto the timeline, or null when it falls outside the clip. */
