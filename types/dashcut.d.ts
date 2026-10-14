@@ -19,7 +19,11 @@ declare global {
    * All times are seconds. A clip occupies [start, start + (out - in) / speed) on the timeline.
    * Visual layers are composited onto a black canvas in array order (first = bottom).
    */
-  type AnimationType = "none" | "fade" | "slide-left" | "slide-right" | "slide-up" | "slide-down" | "zoom-in" | "zoom-out";
+  type AnimationType = "none" | "fade" | "slide-left" | "slide-right" | "slide-up" | "slide-down" | "zoom-in" | "zoom-out" | "wipe-left" | "wipe-right";
+  type KeyframeEasing = "linear" | "ease-in" | "ease-out" | "ease-in-out" | "hold";
+  /** Points are in seconds from the clip's timeline start; the easing of a point shapes the segment that follows it. */
+  type KeyframePoint = { time: number; value: number; easing: KeyframeEasing };
+  type VisualKeyframes = Partial<Record<"x" | "y" | "scale" | "rotation" | "opacity", KeyframePoint[]>>;
   type VisualEffect = "bw" | "vintage" | "vignette" | "sharpen" | "denoise" | "beauty" | "blur" | "chroma-key";
   type AudioEffect = "denoise" | "voice-enhance" | "loudnorm";
   interface ClipAudioSettings {
@@ -28,10 +32,14 @@ declare global {
     fadeOut: number; // seconds
     muted: boolean;
     effects: AudioEffect[];
+    /** When present, replaces `volume` over time; fades still apply on top. */
+    volumeKeyframes?: KeyframePoint[];
   }
   interface CompositionVisual {
     path: string;
-    kind: "video" | "image" | "gif";
+    /** "rgba": a single raw RGBA frame (titles/text rendered by the editor), alpha preserved. */
+    kind: "video" | "image" | "gif" | "rgba";
+    rgba?: { width: number; height: number };
     start: number;
     in: number; // source seconds; for images/GIFs the display range (GIFs loop from in)
     out: number;
@@ -45,6 +53,8 @@ declare global {
     // rotated `rotation` degrees clockwise about its centre, and centred at
     // (W/2 + x*W, H/2 + y*H). Opacity 0..1.
     transform: { x: number; y: number; scale: number; rotation: number; opacity: number };
+    /** Keyframed properties replace the matching static transform value; animations still apply on top. */
+    keyframes?: VisualKeyframes;
     // brightness -1..1 (0), contrast 0..2 (1), saturation 0..3 (1), temperature -1..1 (0, warm > 0).
     adjust: { brightness: number; contrast: number; saturation: number; temperature: number };
     effects: VisualEffect[];
@@ -52,7 +62,8 @@ declare global {
     // In-animation runs over the first `duration` s, out-animation over the last `duration` s.
     // p goes 0→1 (in) or 1→0 (out), linear. fade: opacity *= p. slide-*: offset by (1-p) canvas
     // widths/heights from that side (slide-left enters from the left). zoom-in: scale *= 0.5+0.5p.
-    // zoom-out: scale *= 1.5-0.5p.
+    // zoom-out: scale *= 1.5-0.5p. wipe-right: only the left p fraction of the layer box is visible
+    // (reveals left→right); wipe-left: only the right p fraction is visible (reveals right→left).
     animationIn: { type: AnimationType; duration: number };
     animationOut: { type: AnimationType; duration: number };
     hasAudio: boolean;
