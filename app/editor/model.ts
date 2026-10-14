@@ -43,8 +43,11 @@ export type Clip = {
 };
 
 export type Marker = { id: string; time: number };
-export type Subtitle = { id: number; start: number; end: number; zh: string; en: string };
-export type Project = { tracks: Track[]; clips: Clip[]; markers: Marker[]; subtitles: Subtitle[] };
+export type TimedWord = { start: number; end: number; text: string; prob: number };
+export type Subtitle = { id: number; start: number; end: number; zh: string; en: string; words?: TimedWord[] };
+/** Speech recognised for one asset, in source seconds; sentences are the recogniser's segments. */
+export type Transcript = { language: string; source: "local" | "cloud"; words: TimedWord[]; sentences: Array<{ start: number; end: number }> };
+export type Project = { tracks: Track[]; clips: Clip[]; markers: Marker[]; subtitles: Subtitle[]; transcripts?: Record<string, Transcript> };
 export type EditOptions = { magnet: boolean; linkage: boolean };
 
 export const defaultStillDuration = 3;
@@ -134,6 +137,10 @@ export function packMainTrack(project: Project): Project {
   return { ...project, clips: project.clips.map((clip) => packed.has(clip.id) ? { ...clip, start: packed.get(clip.id)! } : clip) };
 }
 
+export function shiftSubtitle(item: Subtitle, delta: number): Subtitle {
+  return { ...item, start: Math.max(0, item.start + delta), end: Math.max(0, item.end + delta), words: item.words?.map((word) => ({ ...word, start: Math.max(0, word.start + delta), end: Math.max(0, word.end + delta) })) };
+}
+
 /** Shifts everything not on `exceptTrackId` that starts at or after `time`, plus subtitles. */
 export function rippleOthers(project: Project, exceptTrackId: string, time: number, delta: number): Project {
   if (!delta) return project;
@@ -141,7 +148,7 @@ export function rippleOthers(project: Project, exceptTrackId: string, time: numb
     ...project,
     clips: project.clips.map((clip) => clip.trackId !== exceptTrackId && clip.start >= time - 0.001 ? { ...clip, start: Math.max(0, clip.start + delta) } : clip),
     markers: project.markers.map((marker) => marker.time >= time - 0.001 ? { ...marker, time: Math.max(0, marker.time + delta) } : marker),
-    subtitles: project.subtitles.map((item) => item.start >= time - 0.001 ? { ...item, start: Math.max(0, item.start + delta), end: Math.max(0, item.end + delta) } : item),
+    subtitles: project.subtitles.map((item) => item.start >= time - 0.001 ? shiftSubtitle(item, delta) : item),
   };
 }
 
@@ -424,4 +431,62 @@ export function sourceRangeToTimeline(clip: Clip, sourceStart: number, sourceEnd
   const end = Math.min(sourceEnd, clip.out);
   if (end <= start) return null;
   return { start: clip.start + (start - clip.in) / clip.speed, end: clip.start + (end - clip.in) / clip.speed, sourceStart: start, sourceEnd: end };
+}
+
+/** Removes [start, end) of the timeline from subtitles: inside lines go, overlapping lines shrink, later lines move up. */
+function cutSubtitles(subtitles: Subtitle[], start: number, end: number) {
+  const length = end - start;
+  return subtitles.flatMap((item) => {
+    if (item.end <= start + 0.001) return [item];
+    if (item.start >= end - 0.001) return [shiftSubtitle(item, -length)];
+    const words = item.words?.filter((word) => (word.start + word.end) / 2 < start || (word.start + word.end) / 2 >= end).map((word) => word.start >= end ? { ...word, start: word.start - length, end: word.end - length } : word);
+    const nextStart = item.start < start ? item.start : start;
+    const nextEnd = item.end > end ? item.end - length : Math.min(item.end, start);
+    return nextEnd - nextStart > 0.05 ? [{ ...item, start: nextStart, end: nextEnd, words }] : [];
+  });
+}
+
+/**
+ * Ripple-deletes source ranges from clips (transcript edits, clean cuts) in one step.
+ * Ranges are in source seconds of each clip's asset; reversed and frozen clips are skipped.
+ */
+export function cutSourceRanges(project: Project, cuts: Array<{ clipId: string; start: number; end: number }>, options: EditOptions): Project {
+  const spans = cuts.flatMap((cut) => {
+    const clip = project.clips.find((item) => item.id === cut.clipId);
+    const range = clip && sourceRangeToTimeline(clip, cut.start, cut.end);
+    return clip && range && range.end - range.start > 0.02 ? [{ clipId: clip.id, trackId: clip.trackId, start: range.start, end: range.end }] : [];
+  });
+  // Merge overlapping spans per track, then cut from the end so earlier times stay valid.
+  const merged: typeof spans = [];
+  for (const span of [...spans].sort((a, b) => a.trackId.localeCompare(b.trackId) || a.start - b.start)) {
+    const last = merged.at(-1);
+    if (last && last.trackId === span.trackId && span.start <= last.end + 0.001) last.end = Math.max(last.end, span.end);
+    else merged.push({ ...span });
+  }
+  let next = project;
+  for (const span of merged.sort((a, b) => b.start - a.start)) {
+    const length = span.end - span.start;
+    const isMain = next.tracks.some((track) => track.id === span.trackId && track.main);
+    const clips = next.clips.flatMap((clip) => {
+      if (clip.trackId !== span.trackId) {
+        // Overlays follow the cut only when they are linked to the main track.
+        return [options.linkage && isMain && clip.start >= span.end - 0.001 ? { ...clip, start: clip.start - length } : clip];
+      }
+      const end = clipEnd(clip);
+      if (end <= span.start + 0.001) return [clip];
+      if (clip.start >= span.end - 0.001) return [{ ...clip, start: clip.start - length }];
+      // The span overlaps this clip: keep the parts before and after it, joined at span.start.
+      const pieces: Clip[] = [];
+      if (span.start > clip.start + minClipDuration / 2) pieces.push({ ...clip, out: clip.in + (span.start - clip.start) * clip.speed, animationOut: { ...clip.animationOut, type: "none" } });
+      if (end > span.end + minClipDuration / 2) pieces.push({ ...clip, id: pieces.length ? uid("clip") : clip.id, start: span.start, in: clip.in + (span.end - clip.start) * clip.speed, animationIn: { ...clip.animationIn, type: "none" } });
+      return pieces;
+    });
+    next = {
+      ...next,
+      clips,
+      markers: next.markers.flatMap((marker) => marker.time >= span.end ? [{ ...marker, time: marker.time - length }] : marker.time > span.start ? [] : [marker]),
+      subtitles: cutSubtitles(next.subtitles, span.start, span.end),
+    };
+  }
+  return options.magnet ? packMainTrack(next) : next;
 }
