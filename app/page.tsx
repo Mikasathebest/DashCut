@@ -2,7 +2,8 @@
 
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 
-type MediaClip = { id: number; name: string; url: string; sourcePath: string; duration: number; color: string; isDemo?: boolean };
+type MediaKind = "video" | "image" | "gif";
+type MediaClip = { id: number; name: string; kind: MediaKind; url: string; sourcePath: string; duration: number; color: string; isDemo?: boolean };
 type Segment = { id: number; clipId: number; sourceStart: number; sourceEnd: number };
 type TimelineSegment = Segment & { timelineStart: number; timelineEnd: number; clip: MediaClip };
 type Subtitle = { id: number; start: number; end: number; zh: string; en: string };
@@ -18,6 +19,8 @@ type SubtitleStyle = {
 };
 
 const clipColors = ["#5c82ff", "#78a1ff", "#6d8df5", "#86a8ff", "#6fc2b5", "#a47ce9"];
+const defaultImageDuration = 3;
+const mediaKindLabels: Record<MediaKind, string> = { video: "本地视频", image: "图片", gif: "动图" };
 
 const defaultSubtitleStyle: SubtitleStyle = {
   fontFamily: 'Arial, "PingFang SC", "Microsoft YaHei", sans-serif',
@@ -56,6 +59,56 @@ function readVideoDuration(file: File) {
     };
     probe.src = url;
   });
+}
+
+function readImageSize(url: string) {
+  return new Promise<boolean>((resolve) => {
+    const probe = new Image();
+    probe.onload = () => resolve(probe.naturalWidth > 0 && probe.naturalHeight > 0);
+    probe.onerror = () => resolve(false);
+    probe.src = url;
+  });
+}
+
+// Sums GIF frame delays by walking the block structure; returns frame count and loop length in seconds.
+function readGifTiming(buffer: ArrayBuffer) {
+  const bytes = new Uint8Array(buffer);
+  let frames = 0;
+  let seconds = 0;
+  if (bytes.length < 13 || String.fromCharCode(bytes[0], bytes[1], bytes[2]) !== "GIF") return { frames, seconds };
+  let offset = 13;
+  if (bytes[10] & 0x80) offset += 3 * 2 ** ((bytes[10] & 0x07) + 1);
+  const skipSubBlocks = () => {
+    while (offset < bytes.length && bytes[offset]) offset += bytes[offset] + 1;
+    offset += 1;
+  };
+  while (offset < bytes.length) {
+    const block = bytes[offset];
+    if (block === 0x21) {
+      if (bytes[offset + 1] === 0xf9) seconds += (bytes[offset + 4] | (bytes[offset + 5] << 8) || 10) / 100;
+      offset += 2;
+      skipSubBlocks();
+    } else if (block === 0x2c) {
+      const packed = bytes[offset + 9];
+      offset += 10;
+      if (packed & 0x80) offset += 3 * 2 ** ((packed & 0x07) + 1);
+      offset += 1;
+      skipSubBlocks();
+      frames += 1;
+    } else break;
+  }
+  return { frames, seconds };
+}
+
+async function readMediaInfo(file: File, url: string): Promise<{ kind: MediaKind; duration: number }> {
+  if (!file.type.startsWith("image/")) return { kind: "video", duration: await readVideoDuration(file) };
+  if (!(await readImageSize(url))) return { kind: "image", duration: 0 };
+  if (file.type === "image/gif") {
+    const { frames, seconds } = readGifTiming(await file.arrayBuffer());
+    // Repeat short animations whole so the loop does not jump mid-cycle.
+    if (frames > 1 && seconds > 0) return { kind: "gif", duration: seconds * Math.max(1, Math.ceil(defaultImageDuration / seconds)) };
+  }
+  return { kind: "image", duration: defaultImageDuration };
 }
 
 export default function Home() {
@@ -101,6 +154,7 @@ export default function Home() {
   const [loadingHubModels, setLoadingHubModels] = useState(false);
   const [autoTranslate, setAutoTranslate] = useState(true);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const currentRef = useRef(0);
   const videoInputRef = useRef<HTMLInputElement>(null);
   const musicInputRef = useRef<HTMLInputElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -119,7 +173,9 @@ export default function Home() {
     () => timelineSegments.find((segment) => current >= segment.timelineStart && current < segment.timelineEnd) ?? timelineSegments.at(-1),
     [current, timelineSegments],
   );
-  const videoUrl = activeTimelineSegment?.clip.url ?? "";
+  const activeIsVideo = activeTimelineSegment?.clip.kind === "video";
+  const videoUrl = activeIsVideo ? activeTimelineSegment.clip.url : "";
+  const selectedTimelineSegment = timelineSegments.find((segment) => segment.id === selectedSegment);
 
   const activeSubtitle = useMemo(
     () => subtitles.find((item) => current >= item.start && current < item.end),
@@ -135,6 +191,31 @@ export default function Home() {
   }, [activeTimelineSegment, current, playing, videoUrl]);
 
   useEffect(() => {
+    currentRef.current = current;
+  }, [current]);
+
+  // Images have no media clock, so advance the playhead with animation frames.
+  useEffect(() => {
+    const segment = activeTimelineSegment;
+    if (!playing || !segment || segment.clip.kind === "video") return;
+    let frame = 0;
+    let last = performance.now();
+    const tick = (now: number) => {
+      const next = Math.min(segment.timelineEnd, currentRef.current + (now - last) / 1000);
+      last = now;
+      currentRef.current = next;
+      setCurrent(next);
+      if (next >= segment.timelineEnd && segment.timelineEnd >= duration) {
+        setPlaying(false);
+        return;
+      }
+      frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+  }, [activeTimelineSegment, duration, playing]);
+
+  useEffect(() => {
     if (!toast) return;
     const id = window.setTimeout(() => setToast(""), 2400);
     return () => window.clearTimeout(id);
@@ -148,20 +229,27 @@ export default function Home() {
     });
   }, []);
 
-  async function importVideo(event: ChangeEvent<HTMLInputElement>) {
+  async function importMedia(event: ChangeEvent<HTMLInputElement>) {
     const files = Array.from(event.target.files ?? []);
     if (!files.length) return;
+    event.target.value = "";
     const baseId = Math.max(0, ...clips.filter((clip) => !clip.isDemo).map((clip) => clip.id));
-    const imported = await Promise.all(files.map(async (file, index): Promise<MediaClip> => ({
-      id: baseId + index + 1,
-      name: file.name,
-      url: URL.createObjectURL(file),
-      sourcePath: window.dashCutDesktop?.getFilePath(file) ?? "",
-      duration: await readVideoDuration(file),
-      color: clipColors[(baseId + index) % clipColors.length],
-    })));
+    const imported = await Promise.all(files.map(async (file, index): Promise<MediaClip> => {
+      const url = URL.createObjectURL(file);
+      const info = await readMediaInfo(file, url);
+      return {
+        id: baseId + index + 1,
+        name: file.name,
+        kind: info.kind,
+        url,
+        sourcePath: window.dashCutDesktop?.getFilePath(file) ?? "",
+        duration: info.duration,
+        color: clipColors[(baseId + index) % clipColors.length],
+      };
+    }));
     const valid = imported.filter((clip) => clip.duration > 0);
-    if (!valid.length) return setToast("无法读取所选视频");
+    imported.filter((clip) => clip.duration <= 0).forEach((clip) => URL.revokeObjectURL(clip.url));
+    if (!valid.length) return setToast("无法读取所选素材");
     const nextClips = [...clips, ...valid];
     const nextSegments = valid.map((clip) => ({ id: clip.id * 1000, clipId: clip.id, sourceStart: 0, sourceEnd: clip.duration }));
     setClips(nextClips);
@@ -169,8 +257,22 @@ export default function Home() {
     setSelectedSegment(nextSegments[0].id);
     setCurrent(0);
     setPlaying(false);
-    event.target.value = "";
-    setToast(`已导入 ${valid.length} 个视频片段`);
+    const counts = (["video", "image", "gif"] as const).map((kind) => [kind, valid.filter((clip) => clip.kind === kind).length] as const).filter(([, count]) => count);
+    const skipped = imported.length - valid.length;
+    setToast(`已导入 ${counts.map(([kind, count]) => `${count} 个${kind === "video" ? "视频" : mediaKindLabels[kind]}`).join("、")}${skipped ? `，${skipped} 个文件无法读取` : ""}`);
+  }
+
+  function updateImageDuration(value: number) {
+    if (isGenerating) return setToast("请等待字幕生成完成后再编辑时间线");
+    const target = selectedTimelineSegment;
+    if (!target || target.clip.kind === "video") return;
+    if (!Number.isFinite(value) || value < 0.5 || value > 600) return setToast("图片时长需在 0.5 到 600 秒之间");
+    const delta = value - (target.sourceEnd - target.sourceStart);
+    if (!delta) return;
+    setSegments((items) => items.map((segment) => segment.id === target.id ? { ...segment, sourceEnd: segment.sourceStart + value } : segment));
+    // Keep later captions attached to their audio after the timeline shifts.
+    setSubtitles((items) => items.map((item) => item.start >= target.timelineEnd - 0.001 ? { ...item, start: item.start + delta, end: item.end + delta } : item));
+    if (current > target.timelineStart + value) setCurrent(target.timelineStart + value);
   }
 
   function importMusic(event: ChangeEvent<HTMLInputElement>) {
@@ -204,7 +306,7 @@ export default function Home() {
 
   function removeClip() {
     if (isGenerating) return setToast("请等待字幕生成完成后再编辑时间线");
-    if (segments.length <= 1) return setToast("至少保留一个视频片段");
+    if (segments.length <= 1) return setToast("至少保留一个片段");
     const selected = timelineSegments.find((segment) => segment.id === selectedSegment);
     setSegments(segments.filter((segment) => segment.id !== selectedSegment));
     setSubtitles([]);
@@ -243,8 +345,8 @@ export default function Home() {
         setHardwareOpen(true);
         return;
       }
-      const sourceClips = clips.filter((clip) => !clip.isDemo && clip.sourcePath && timelineSegments.some((segment) => segment.clipId === clip.id));
-      if (!sourceClips.length) return setToast("请先导入本地视频");
+      const sourceClips = clips.filter((clip) => clip.kind === "video" && !clip.isDemo && clip.sourcePath && timelineSegments.some((segment) => segment.clipId === clip.id));
+      if (!sourceClips.length) return setToast("时间线中没有含人声的视频，图片和动图无需识别");
       setIsGenerating(true);
       try {
         const useCuda = Boolean(hardware.gpus.some((gpu) => gpu.fasterWhisperAcceleration) && Number(hardware.runtime.info?.cudaDeviceCount) > 0);
@@ -295,8 +397,8 @@ export default function Home() {
       return;
     }
     if (!window.dashCutDesktop) return;
-    const sourceClips = clips.filter((clip) => !clip.isDemo && clip.sourcePath && timelineSegments.some((segment) => segment.clipId === clip.id));
-    if (!sourceClips.length) return setToast("请先导入本地视频");
+    const sourceClips = clips.filter((clip) => clip.kind === "video" && !clip.isDemo && clip.sourcePath && timelineSegments.some((segment) => segment.clipId === clip.id));
+    if (!sourceClips.length) return setToast("时间线中没有含人声的视频，图片和动图无需识别");
     setIsGenerating(true);
     try {
       const response = await window.dashCutDesktop.transcribeHub({ config: { ...hubConfig, model: hubAudioModel }, clips: sourceClips.map((clip) => ({ id: clip.id, path: clip.sourcePath })) });
@@ -403,14 +505,14 @@ export default function Home() {
 
   async function startExport() {
     if (!window.dashCutDesktop) return setToast("真实视频导出仅支持桌面版");
-    if (!timelineSegments.length) return setToast("请先导入视频");
+    if (!timelineSegments.length) return setToast("请先导入视频或图片");
     setExporting(true);
     setExportResult(null);
     setProgress(0);
     setProgressStage("正在准备导出");
     try {
       const result = await window.dashCutDesktop.exportVideo({
-        segments: timelineSegments.map((segment) => ({ path: segment.clip.sourcePath, sourceStart: segment.sourceStart, sourceEnd: segment.sourceEnd })),
+        segments: timelineSegments.map((segment) => ({ path: segment.clip.sourcePath, kind: segment.clip.kind, sourceStart: segment.sourceStart, sourceEnd: segment.sourceEnd })),
         subtitles,
         subtitleStyle,
         musicPath,
@@ -488,13 +590,14 @@ export default function Home() {
   const panelContent = {
     media: <>
       <div className="panel-heading"><div><span className="eyebrow">MEDIA</span><h2>项目媒体</h2></div><button className="icon-button">•••</button></div>
-      <button className="upload-card" onClick={() => videoInputRef.current?.click()}><span>＋</span><strong>导入多个视频片段</strong><small>可多选 MP4、MOV、WebM</small></button>
+      <button className="upload-card" onClick={() => videoInputRef.current?.click()}><span>＋</span><strong>导入视频、图片或动图</strong><small>可混合多选 MP4、MOV、WebM、JPG、PNG、WebP、GIF</small></button>
       <h3 className="section-title">项目素材 · {clips.length}</h3>
       <div className="media-list">{clips.map((clip) => <button className="media-card" key={clip.id} onClick={() => {
         const segment = timelineSegments.find((item) => item.clipId === clip.id);
         if (segment) { setCurrent(segment.timelineStart); setSelectedSegment(segment.id); }
-      }}><div className="media-thumb" style={{ background: clip.color }}><span>▶</span></div><div><strong>{clip.name}</strong><small>{formatTime(clip.duration)} · 本地视频</small></div></button>)}</div>
-      {!clips.length && <p className="empty-hint">尚未导入素材。选择多个视频后会按顺序加入时间线。</p>}
+      }}><div className="media-thumb" style={{ background: clip.kind === "video" ? clip.color : `center / cover no-repeat url("${clip.url}")` }}>{clip.kind !== "image" && <span>{clip.kind === "gif" ? "GIF" : "▶"}</span>}</div><div><strong>{clip.name}</strong><small>{formatTime(clip.duration)} · {mediaKindLabels[clip.kind]}</small></div></button>)}</div>
+      {selectedTimelineSegment && selectedTimelineSegment.clip.kind !== "video" && <label className="range-label image-duration"><span>所选{mediaKindLabels[selectedTimelineSegment.clip.kind]}时长（秒）</span><input key={`${selectedTimelineSegment.id}-${selectedTimelineSegment.sourceEnd}`} type="number" min="0.5" max="600" step="0.5" defaultValue={(selectedTimelineSegment.sourceEnd - selectedTimelineSegment.sourceStart).toFixed(1)} disabled={isGenerating} onBlur={(event) => updateImageDuration(event.currentTarget.valueAsNumber)} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }} /></label>}
+      {!clips.length && <p className="empty-hint">尚未导入素材。可同时选择视频、图片和动图，按选择顺序加入时间线；图片默认 {defaultImageDuration} 秒。</p>}
     </>,
     audio: <>
       <div className="panel-heading"><div><span className="eyebrow">AUDIO</span><h2>背景音乐</h2></div><button className="icon-button">＋</button></div>
@@ -558,7 +661,7 @@ export default function Home() {
   };
 
   return <main className="app-shell">
-    <input ref={videoInputRef} className="hidden-input" type="file" accept="video/*" multiple onChange={importVideo} />
+    <input ref={videoInputRef} className="hidden-input" type="file" accept="video/*,image/*" multiple onChange={importMedia} />
     <input ref={musicInputRef} className="hidden-input" type="file" accept="audio/*" onChange={importMusic} />
     <header className="topbar">
       <div className="brand"><span className="brand-mark"><i></i><i></i></span><strong>DashCut <em>极剪</em></strong></div>
@@ -590,7 +693,7 @@ export default function Home() {
               if (nextSegment) setCurrent(nextSegment.timelineStart);
               else setPlaying(false);
             }
-          }} onEnded={() => setPlaying(false)} /> : <button className="empty-stage" onClick={() => videoInputRef.current?.click()}><span>＋</span><strong>导入视频开始创作</strong><small>支持一次选择多个视频片段</small></button>}
+          }} onEnded={() => setPlaying(false)} /> : activeTimelineSegment ? <img className="stage-image" key={activeTimelineSegment.clip.url} src={activeTimelineSegment.clip.url} alt={activeTimelineSegment.clip.name} /> : <button className="empty-stage" onClick={() => videoInputRef.current?.click()}><span>＋</span><strong>导入素材开始创作</strong><small>支持一次选择多个视频、图片和动图</small></button>}{/* eslint-disable-line @next/next/no-img-element -- local blob URLs cannot use next/image */}
           <div className="caption-preview" style={{
             color: subtitleStyle.color,
             fontFamily: subtitleStyle.fontFamily,

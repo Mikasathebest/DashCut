@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
-const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, nativeImage, shell } = require("electron");
 const { existsSync } = require("node:fs");
+const { writeFile } = require("node:fs/promises");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 const { getHardwareProfile } = require("./hardware.cjs");
@@ -32,6 +33,13 @@ function mediaRuntimePath() {
   return app.isPackaged || existsSync(expected) ? expected : undefined;
 }
 
+async function prepareStillImage(source, output) {
+  const image = nativeImage.createFromPath(source);
+  if (image.isEmpty()) return source;
+  await writeFile(output, image.toJPEG(95));
+  return output;
+}
+
 ipcMain.handle("hardware:get-profile", async () => {
   const options = localAiOptions();
   const runtime = await getRuntimeStatus(options);
@@ -61,6 +69,7 @@ ipcMain.handle("export:video", async (event, request) => {
     tempPath: app.getPath("temp"),
     ffmpegPath: mediaRuntimePath(),
     platform: process.platform,
+    prepareStill: prepareStillImage,
     onProgress: (progress) => event.sender.send("export:progress", progress),
   });
 });

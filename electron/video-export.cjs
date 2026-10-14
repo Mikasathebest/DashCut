@@ -98,19 +98,31 @@ function runFfmpeg(args, onTime, options = {}) {
   });
 }
 
+function segmentInputArgs(segment, fps) {
+  const clipDuration = segment.sourceEnd - segment.sourceStart;
+  // Stills repeat one frame; GIFs loop forever and are trimmed by the filter graph.
+  if (segment.kind === "image") return ["-loop", "1", "-framerate", String(fps), "-t", String(clipDuration), "-i", segment.path];
+  if (segment.kind === "gif") return ["-ignore_loop", "0", "-t", String(segment.sourceEnd), "-i", segment.path];
+  return ["-ss", String(segment.sourceStart), "-t", String(clipDuration), "-i", segment.path];
+}
+
 async function normalizeSegment(segment, output, settings, onProgress) {
   const clipDuration = segment.sourceEnd - segment.sourceStart;
-  const scale = `scale=${settings.width}:${settings.height}:force_original_aspect_ratio=decrease,pad=${settings.width}:${settings.height}:(ow-iw)/2:(oh-ih)/2:black,fps=${settings.fps},format=${encoderPixelFormat(settings.platform)}`;
-  const common = ["-ss", String(segment.sourceStart), "-t", String(clipDuration), "-i", segment.path];
+  const trim = segment.kind === "gif" ? `trim=start=${segment.sourceStart},setpts=PTS-STARTPTS,` : "";
+  const scale = `${trim}scale=${settings.width}:${settings.height}:force_original_aspect_ratio=decrease,pad=${settings.width}:${settings.height}:(ow-iw)/2:(oh-ih)/2:black,setsar=1,fps=${settings.fps},format=${encoderPixelFormat(settings.platform)}`;
+  const common = segmentInputArgs(segment, settings.fps);
+  const hasAudio = segment.kind !== "image" && segment.kind !== "gif";
   const hardwareModes = settings.platform === "win32" ? [true, false] : [undefined];
   let lastError;
   for (const hardware of hardwareModes) {
     const videoArgs = videoEncoderArgs(settings.platform, { ...settings, finalPass: false, hardware });
-    try {
-      await runFfmpeg([...common, "-map", "0:v:0", "-map", "0:a:0", "-vf", scale, "-af", "aresample=async=1:first_pts=0", ...videoArgs, "-c:a", "aac", "-ar", "48000", "-ac", "2", "-tag:v", "avc1", output], onProgress, settings);
-      return;
-    } catch (error) {
-      lastError = error;
+    if (hasAudio) {
+      try {
+        await runFfmpeg([...common, "-map", "0:v:0", "-map", "0:a:0", "-vf", scale, "-af", "aresample=async=1:first_pts=0", ...videoArgs, "-c:a", "aac", "-ar", "48000", "-ac", "2", "-tag:v", "avc1", output], onProgress, settings);
+        return;
+      } catch (error) {
+        lastError = error;
+      }
     }
     try {
       await runFfmpeg([...common, "-f", "lavfi", "-t", String(clipDuration), "-i", "anullsrc=channel_layout=stereo:sample_rate=48000", "-map", "0:v:0", "-map", "1:a:0", "-vf", scale, ...videoArgs, "-c:a", "aac", "-tag:v", "avc1", "-shortest", output], onProgress, settings);
@@ -133,11 +145,18 @@ async function exportVideo(request, options) {
     const assPath = path.join(tempDir, "subtitles.ass");
     await writeFile(assPath, createAss(request.subtitles || [], request.subtitleStyle || {}, resolution[0], resolution[1]), "utf8");
     const normalized = [];
+    const preparedStills = new Map();
     let completedDuration = 0;
     for (const [index, segment] of request.segments.entries()) {
       const output = path.join(tempDir, `segment-${String(index).padStart(4, "0")}.mp4`);
       const duration = segment.sourceEnd - segment.sourceStart;
-      await normalizeSegment(segment, output, { width: resolution[0], height: resolution[1], fps, destination: request.platform, platform: options.platform ?? process.platform, ffmpegPath: options.ffmpegPath }, (time) => emit(((completedDuration + Math.min(time, duration)) / totalDuration) * 60, `正在处理片段 ${index + 1}/${request.segments.length}`));
+      let source = segment;
+      if (segment.kind === "image" && options.prepareStill) {
+        // The LGPL FFmpeg build has no PNG decoder, so the host re-encodes stills first.
+        if (!preparedStills.has(segment.path)) preparedStills.set(segment.path, await options.prepareStill(segment.path, path.join(tempDir, `still-${preparedStills.size}.jpg`)));
+        source = { ...segment, path: preparedStills.get(segment.path) };
+      }
+      await normalizeSegment(source, output,{ width: resolution[0], height: resolution[1], fps, destination: request.platform, platform: options.platform ?? process.platform, ffmpegPath: options.ffmpegPath }, (time) => emit(((completedDuration + Math.min(time, duration)) / totalDuration) * 60, `正在处理片段 ${index + 1}/${request.segments.length}`));
       completedDuration += duration;
       normalized.push(output);
     }

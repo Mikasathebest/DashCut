@@ -51,7 +51,7 @@ declare global {
       installLocalModel(model: string): Promise<{ model: string; sizeBytes?: number; alreadyInstalled?: boolean }>;
       removeLocalModel(model: string): Promise<{ model: string; removed: boolean }>;
       exportVideo(request: {
-        segments: Array<{ path: string; sourceStart: number; sourceEnd: number }>;
+        segments: Array<{ path: string; kind: "video" | "image" | "gif"; sourceStart: number; sourceEnd: number }>;
         subtitles: Array<{ start: number; end: number; zh: string; en: string }>;
         subtitleStyle: Record<string, string | number>;
         musicPath: string;

@@ -62,3 +62,38 @@ test("exports a playable MP4 with burned subtitles and SRT sidecars", { timeout:
     await rm(work, { recursive: true, force: true });
   }
 });
+
+test("exports mixed video, still image and looping GIF segments", { timeout: 180_000, skip: !ffmpegAvailable }, async () => {
+  const work = await mkdtemp(path.join(tmpdir(), "dashcut-mixed-test-"));
+  const video = path.join(work, "clip.mp4");
+  const still = path.join(work, "photo.jpg");
+  const gif = path.join(work, "loop.gif");
+  const output = path.join(work, "mixed.mp4");
+  try {
+    await execFileAsync(ffmpeg, ["-hide_banner", "-y", "-f", "lavfi", "-i", "color=c=0x315c78:s=320x180:d=1", "-f", "lavfi", "-i", "sine=frequency=440:duration=1", "-shortest", "-c:v", "mpeg4", "-pix_fmt", "yuv420p", "-c:a", "aac", video]);
+    await execFileAsync(ffmpeg, ["-hide_banner", "-y", "-f", "lavfi", "-i", "testsrc=s=301x401:d=1", "-frames:v", "1", "-c:v", "mjpeg", "-pix_fmt", "yuvj420p", still]);
+    await execFileAsync(ffmpeg, ["-hide_banner", "-y", "-f", "lavfi", "-i", "testsrc=s=160x120:r=10:d=0.5", "-c:v", "gif", gif]);
+    const prepared = [];
+    await exportVideo({
+      segments: [
+        { path: video, kind: "video", sourceStart: 0, sourceEnd: 1 },
+        { path: still, kind: "image", sourceStart: 0, sourceEnd: 1.5 },
+        { path: gif, kind: "gif", sourceStart: 0.2, sourceEnd: 1.4 },
+      ],
+      subtitles: [],
+      subtitleStyle: {},
+      musicPath: "",
+      musicVolume: 0.35,
+      fps: 30,
+      resolution: 720,
+      platform: "youtube",
+    }, { outputPath: output, tempPath: work, ffmpegPath: ffmpeg, platform: process.platform, prepareStill: async (source) => { prepared.push(source); return source; } });
+    assert.deepEqual(prepared, [still]);
+    const { stderr } = await execFileAsync(ffmpeg, ["-hide_banner", "-i", output, "-f", "null", "-"]).catch((error) => error);
+    const seconds = stderr.match(/time=(\d+):(\d+):(\d+\.\d+)/g)?.at(-1)?.match(/(\d+):(\d+):(\d+\.\d+)/).slice(1).reduce((sum, part, index) => sum + Number(part) * [3600, 60, 1][index], 0);
+    assert.ok(Math.abs(seconds - 3.7) < 0.25, `expected ~3.7s, got ${seconds}`);
+    assert.match(stderr, /Audio: aac/);
+  } finally {
+    await rm(work, { recursive: true, force: true });
+  }
+});
