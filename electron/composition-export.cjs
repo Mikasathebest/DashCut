@@ -7,7 +7,8 @@ const { createAss, createSrt, resolveFfmpegExecutable, videoEncoderArgs } = requ
 // Multi-track composition exporter. Implements the CompositionRequest contract documented in
 // types/dashcut.d.ts with filters available in the bundled LGPL FFmpeg build (no eq/boxblur/PNG).
 
-const ANIMATION_TYPES = new Set(["none", "fade", "slide-left", "slide-right", "slide-up", "slide-down", "zoom-in", "zoom-out"]);
+const ANIMATION_TYPES = new Set(["none", "fade", "slide-left", "slide-right", "slide-up", "slide-down", "zoom-in", "zoom-out", "wipe-left", "wipe-right"]);
+const EASINGS = new Set(["linear", "ease-in", "ease-out", "ease-in-out", "hold"]);
 
 function num(value, fallback = 0) {
   const parsed = Number(value);
@@ -42,10 +43,71 @@ function clipSpeed(visualOrAudio) {
   return clamp(num(visualOrAudio.speed, 1) || 1, 0.1, 10);
 }
 
-/** Timeline length of a clip: (out - in) / speed; images ignore speed. */
+/** Timeline length of a clip: (out - in) / speed; stills (images, RGBA frames) ignore speed. */
 function clipDuration(clip, kind = clip.kind) {
   const range = Math.max(0, num(clip.out) - num(clip.in));
-  return kind === "image" ? range : range / clipSpeed(clip);
+  return kind === "image" || kind === "rgba" ? range : range / clipSpeed(clip);
+}
+
+/** Valid keyframe points sorted by time, or null when the property is not keyframed. */
+function normalizeKeyframes(points) {
+  if (!Array.isArray(points)) return null;
+  const valid = points
+    .filter((point) => point && Number.isFinite(Number(point.time)) && Number.isFinite(Number(point.value)))
+    .map((point) => ({ time: Number(point.time), value: Number(point.value), easing: EASINGS.has(point.easing) ? point.easing : "linear" }))
+    .sort((a, b) => a.time - b.time);
+  return valid.length ? valid : null;
+}
+
+function easeValue(easing, p) {
+  if (easing === "ease-in") return p * p;
+  if (easing === "ease-out") return 1 - (1 - p) * (1 - p);
+  if (easing === "ease-in-out") return p < 0.5 ? 2 * p * p : 1 - 2 * (1 - p) * (1 - p);
+  if (easing === "hold") return 0;
+  return p;
+}
+
+function easeExpression(easing, p) {
+  if (easing === "ease-in") return `${p}*${p}`;
+  if (easing === "ease-out") return `(1-(1-${p})*(1-${p}))`;
+  if (easing === "ease-in-out") return `if(lt(${p},0.5),2*${p}*${p},1-2*(1-${p})*(1-${p}))`;
+  if (easing === "hold") return "0";
+  return p;
+}
+
+/**
+ * Reference evaluator for keyframes at clip-local time `t`: holds the first/last value outside
+ * the keyed range and interpolates each segment with the easing of its left point.
+ */
+function keyframeValue(points, t) {
+  const list = normalizeKeyframes(points);
+  if (!list) return undefined;
+  if (t < list[0].time) return list[0].value;
+  for (let index = 0; index < list.length - 1; index += 1) {
+    const left = list[index];
+    const right = list[index + 1];
+    if (right.time > left.time && t < right.time) {
+      return left.value + (right.value - left.value) * easeValue(left.easing, (t - left.time) / (right.time - left.time));
+    }
+  }
+  return list.at(-1).value;
+}
+
+/** FFmpeg expression mirroring keyframeValue; `localTime` is an expression for clip-local seconds. */
+function keyframeExpression(points, localTime) {
+  const list = normalizeKeyframes(points);
+  if (!list) return undefined;
+  let expression = f(list.at(-1).value);
+  for (let index = list.length - 2; index >= 0; index -= 1) {
+    const left = list[index];
+    const right = list[index + 1];
+    if (!(right.time > left.time)) continue;
+    const delta = right.value - left.value;
+    const p = `((${localTime}-${f(left.time)})/${f(right.time - left.time)})`;
+    const segment = left.easing === "hold" || delta === 0 ? f(left.value) : `(${f(left.value)}+${f(delta)}*${easeExpression(left.easing, p)})`;
+    expression = `if(lt(${localTime},${f(right.time)}),${segment},${expression})`;
+  }
+  return list.length > 1 ? `if(lt(${localTime},${f(list[0].time)}),${f(list[0].value)},${expression})` : expression;
 }
 
 /** atempo accepts 0.5..100 per instance; split slower factors into a chain. */
@@ -75,9 +137,9 @@ function normalizeAnimation(animation) {
  * Expression helpers for in/out animation progress. `t` is timeline time.
  * p_in rises 0→1 over [start, start + dIn]; p_out falls 1→0 over [end - dOut, end].
  */
-function progressExpressions(start, end, animIn, animOut) {
-  const pIn = animIn.type === "none" ? "1" : `clip((t-${f(start)})/${f(animIn.duration)},0,1)`;
-  const pOut = animOut.type === "none" ? "1" : `clip((${f(end)}-t)/${f(animOut.duration)},0,1)`;
+function progressExpressions(start, end, animIn, animOut, time = "t") {
+  const pIn = animIn.type === "none" ? "1" : `clip((${time}-${f(start)})/${f(animIn.duration)},0,1)`;
+  const pOut = animOut.type === "none" ? "1" : `clip((${f(end)}-${time})/${f(animOut.duration)},0,1)`;
   return { pIn, pOut };
 }
 
@@ -90,6 +152,13 @@ function slideTerm(animation, progress, axis, size) {
 function zoomTerm(animation, progress) {
   if (animation.type === "zoom-in") return `(0.5+0.5*${progress})`;
   if (animation.type === "zoom-out") return `(1.5-0.5*${progress})`;
+  return "";
+}
+
+/** geq alpha mask for wipes: wipe-right keeps the left p fraction, wipe-left the right p fraction. */
+function wipeTerm(animation, progress) {
+  if (animation.type === "wipe-right") return `lt(X,W*${progress})`;
+  if (animation.type === "wipe-left") return `gte(X,W*(1-${progress}))`;
   return "";
 }
 
@@ -127,6 +196,12 @@ function effectFilters(effects) {
 /** Input arguments (placed before `-i`) for one visual layer. */
 function visualInputArgs(visual, fps, sourcePath) {
   const length = clipDuration(visual);
+  if (visual.kind === "rgba") {
+    // One raw RGBA8 frame; the layer chain loops it for the clip's duration.
+    const rawWidth = Math.max(1, Math.round(num(visual.rgba?.width, 1)));
+    const rawHeight = Math.max(1, Math.round(num(visual.rgba?.height, 1)));
+    return ["-f", "rawvideo", "-pix_fmt", "rgba", "-video_size", `${rawWidth}x${rawHeight}`, "-framerate", String(fps), "-i", sourcePath];
+  }
   if (visual.kind === "image") return ["-loop", "1", "-framerate", String(fps), "-t", f(length + 1 / fps), "-i", sourcePath];
   if (visual.kind === "gif") return ["-ignore_loop", "0", "-t", f(num(visual.out) + 1), "-i", sourcePath];
   if (visual.freezeAt !== null && visual.freezeAt !== undefined && Number.isFinite(Number(visual.freezeAt))) {
@@ -148,8 +223,8 @@ function visualLayerChain(visual, index, inputLabel, settings) {
   const speed = clipSpeed(visual);
   const filters = [];
 
-  // 1. Timing: source range → layer-local timeline [0, length).
-  if (isFrozen(visual)) {
+  // 1. Timing: source range → layer-local timeline [0, length). RGBA titles hold their single frame.
+  if (isFrozen(visual) || visual.kind === "rgba") {
     filters.push("trim=end_frame=1", "setpts=PTS-STARTPTS", "loop=loop=-1:size=1:start=0", `fps=${fps}`);
   } else if (visual.kind === "image") {
     filters.push("setpts=PTS-STARTPTS", `fps=${fps}`);
@@ -177,9 +252,13 @@ function visualLayerChain(visual, index, inputLabel, settings) {
   else if (quarter === 180) filters.push("hflip", "vflip");
   else if (quarter === 270) filters.push("transpose=cclock");
 
-  // 3. Contain-fit into the canvas, scaled by transform.scale (static part).
+  // 3. Contain-fit into the canvas, scaled by transform.scale (static part). Keyframed scale fits
+  // at its largest value and shrinks per frame in step 6, so the overlay frame size stays fixed.
   const transform = visual.transform || {};
-  const scale = clamp(num(transform.scale, 1), 0.01, 20);
+  const keyframes = visual.keyframes || {};
+  const local = (time) => `(${time}-${f(start)})`;
+  const scaleKeys = normalizeKeyframes(keyframes.scale);
+  const scale = clamp(scaleKeys ? Math.max(...scaleKeys.map((point) => point.value)) : num(transform.scale, 1), 0.01, 20);
   const boxW = Math.max(2, Math.round(W * scale));
   const boxH = Math.max(2, Math.round(H * scale));
   filters.push(`scale=w=${boxW}:h=${boxH}:force_original_aspect_ratio=decrease:force_divisible_by=2:flags=bicubic`, "setsar=1");
@@ -196,11 +275,41 @@ function visualLayerChain(visual, index, inputLabel, settings) {
   // 5. Move onto the timeline so frame timestamps equal composition time.
   filters.push(`setpts=PTS+${f(start)}/TB`);
 
-  // 6. Animated zoom keeps a constant frame size: scale per frame, then pad into a fixed box.
+  // 6a. Per-frame alpha for opacity keyframes and wipe masks, applied to the layer box (geq's T is timeline time).
   const animIn = normalizeAnimation(visual.animationIn);
   const animOut = normalizeAnimation(visual.animationOut);
   const { pIn, pOut } = progressExpressions(start, end, animIn, animOut);
-  const zoomParts = [zoomTerm(animIn, pIn), zoomTerm(animOut, pOut)].filter(Boolean);
+  const geqProgress = progressExpressions(start, end, animIn, animOut, "T");
+  const opacityExpression = keyframeExpression(keyframes.opacity, local("T"));
+  // geq evaluates per pixel, so the time-only values are computed once per row (X = 0, rows never
+  // span slice threads) into st() registers, and only the alpha plane is processed.
+  const stores = [];
+  const alphaFactors = [];
+  if (opacityExpression) {
+    stores.push(`st(0,clip(${opacityExpression},0,1))`);
+    alphaFactors.push("ld(0)");
+  }
+  [[animIn, geqProgress.pIn, 1], [animOut, geqProgress.pOut, 2]].forEach(([animation, progress, register]) => {
+    const term = wipeTerm(animation, `ld(${register})`);
+    if (!term) return;
+    stores.push(`st(${register},${progress})`);
+    alphaFactors.push(term);
+  });
+  if (alphaFactors.length) {
+    const colour = `kc${index}`;
+    const alpha = `ka${index}`;
+    const mask = `km${index}`;
+    const expression = `if(eq(X,0),${stores.join("+")},0);p(X,Y)*${alphaFactors.join("*")}`;
+    filters.push(`split[${colour}][${alpha}];[${alpha}]alphaextract,geq=lum='${expression}'[${mask}];[${colour}][${mask}]alphamerge`, "format=rgba");
+  }
+
+  // 6b. Animated zoom and keyframed scale keep a constant frame size: scale per frame, then pad into a fixed box.
+  const scaleExpression = keyframeExpression(keyframes.scale, local("t"));
+  const zoomParts = [
+    scaleExpression ? `(clip(${scaleExpression},0.01,20)/${f(scale)})` : "",
+    zoomTerm(animIn, pIn),
+    zoomTerm(animOut, pOut),
+  ].filter(Boolean);
   if (zoomParts.length) {
     const maxZoom = [animIn, animOut].some((item) => item.type === "zoom-out") ? 1.5 : 1;
     const zoom = zoomParts.join("*");
@@ -212,12 +321,17 @@ function visualLayerChain(visual, index, inputLabel, settings) {
 
   // 7. Rotation about the centre, then opacity and fades on the alpha channel.
   const rotation = num(transform.rotation, 0) % 360;
-  if (Math.abs(rotation) > 1e-6) {
+  const rotationExpression = keyframeExpression(keyframes.rotation, local("t"));
+  if (rotationExpression) {
+    // A canvas as wide as the diagonal fits the layer at any angle.
+    const side = "ceil(hypot(iw,ih)/2)*2";
+    filters.push(`rotate=a='(${rotationExpression})*PI/180':ow='${side}':oh='${side}':c=black@0:bilinear=1`);
+  } else if (Math.abs(rotation) > 1e-6) {
     const radians = f((rotation * Math.PI) / 180);
     filters.push(`rotate=a=${radians}:ow='rotw(${radians})':oh='roth(${radians})':c=black@0:bilinear=1`);
   }
   const opacity = clamp(num(transform.opacity, 1), 0, 1);
-  if (opacity < 1) filters.push(`colorchannelmixer=aa=${f(opacity)}`);
+  if (!opacityExpression && opacity < 1) filters.push(`colorchannelmixer=aa=${f(opacity)}`);
   if (animIn.type === "fade") filters.push(`fade=t=in:st=${f(start)}:d=${f(Math.min(animIn.duration, length))}:alpha=1`);
   if (animOut.type === "fade") {
     const fadeDuration = Math.min(animOut.duration, length);
@@ -230,8 +344,10 @@ function visualLayerChain(visual, index, inputLabel, settings) {
   // Overlay position: centre at (W/2 + x*W, H/2 + y*H) plus slide offsets.
   const slideX = [slideTerm(animIn, pIn, "x", "main_w"), slideTerm(animOut, pOut, "x", "main_w")].join("");
   const slideY = [slideTerm(animIn, pIn, "y", "main_h"), slideTerm(animOut, pOut, "y", "main_h")].join("");
-  const x = `main_w/2+${f(num(transform.x, 0))}*main_w-overlay_w/2${slideX}`;
-  const y = `main_h/2+${f(num(transform.y, 0))}*main_h-overlay_h/2${slideY}`;
+  const xExpression = keyframeExpression(keyframes.x, local("t"));
+  const yExpression = keyframeExpression(keyframes.y, local("t"));
+  const x = `main_w/2+${xExpression ? `(${xExpression})` : f(num(transform.x, 0))}*main_w-overlay_w/2${slideX}`;
+  const y = `main_h/2+${yExpression ? `(${yExpression})` : f(num(transform.y, 0))}*main_h-overlay_h/2${slideY}`;
   const enable = `between(t,${f(start)},${f(end - 1 / (fps * 4))})`;
   return { chain, layerLabel, overlay: `overlay=x='${x}':y='${y}':eof_action=pass:repeatlast=0:format=auto:enable='${enable}'`, start, end };
 }
@@ -256,8 +372,12 @@ function audioClipChain(clip, inputLabel, outLabel, options = {}) {
   filters.push(...atempoChain(clipSpeed(clip)));
   filters.push(...audioEffectFilters(settings.effects));
   filters.push(`atrim=duration=${f(length)}`, "asetpts=PTS-STARTPTS");
+  // After atrim/asetpts (and before adelay) t is clip-local timeline time, i.e. after the speed
+  // change, which is how volume keyframe times are defined.
+  const volumeExpression = keyframeExpression(settings.volumeKeyframes, "t");
   const volume = clamp(num(settings.volume, 1), 0, 2);
-  if (volume !== 1) filters.push(`volume=${f(volume)}`);
+  if (volumeExpression) filters.push(`volume=eval=frame:volume='clip(${volumeExpression},0,2)'`);
+  else if (volume !== 1) filters.push(`volume=${f(volume)}`);
   const fadeIn = Math.min(Math.max(0, num(settings.fadeIn)), length);
   const fadeOut = Math.min(Math.max(0, num(settings.fadeOut)), length);
   if (fadeIn > 0) filters.push(`afade=t=in:st=0:d=${f(fadeIn)}`);
@@ -425,4 +545,4 @@ async function exportComposition(request, options) {
   }
 }
 
-module.exports = { atempoChain, buildCompositionGraph, clipDuration, exportComposition };
+module.exports = { atempoChain, buildCompositionGraph, clipDuration, exportComposition, keyframeExpression, keyframeValue };

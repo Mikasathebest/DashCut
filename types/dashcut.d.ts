@@ -154,6 +154,7 @@ declare global {
       saveRecording(bytes: ArrayBuffer): Promise<string>;
       requestMicrophone(): Promise<boolean>;
       registerMedia(paths: string[]): Promise<string[]>;
+      writeExportLayer(bytes: ArrayBuffer): Promise<string>;
       saveProject(request: { document: unknown; projectPath: string; saveAs: boolean }): Promise<{ canceled?: boolean; projectPath?: string }>;
       openProject(projectPath?: string): Promise<{ canceled?: boolean; projectPath?: string; document?: unknown; missing?: string[] }>;
       recentProjects(): Promise<Array<{ path: string; title: string; openedAt: string; exists: boolean }>>;

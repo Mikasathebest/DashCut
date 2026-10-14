@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 const { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, protocol, safeStorage, shell, systemPreferences } = require("electron");
 const { existsSync } = require("node:fs");
-const { mkdir, writeFile } = require("node:fs/promises");
+const { mkdir, rm, writeFile } = require("node:fs/promises");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 const { getHardwareProfile } = require("./hardware.cjs");
@@ -120,6 +120,15 @@ ipcMain.handle("media:microphone", async () => {
   if (process.platform !== "darwin") return true;
   return systemPreferences.getMediaAccessStatus("microphone") === "granted" || systemPreferences.askForMediaAccess("microphone");
 });
+// Title layers rendered by the editor for the exporter; old ones are cleared on the next launch.
+const layerDir = () => path.join(app.getPath("temp"), "dashcut-layers");
+ipcMain.handle("export:write-layer", async (_event, bytes) => {
+  await mkdir(layerDir(), { recursive: true });
+  const target = path.join(layerDir(), `layer-${Date.now()}-${Math.random().toString(36).slice(2)}.rgba`);
+  await writeFile(target, Buffer.from(bytes));
+  return target;
+});
+app.whenReady().then(() => rm(layerDir(), { recursive: true, force: true })).catch(() => undefined);
 ipcMain.handle("media:register", (_event, paths) => media.allow(Array.isArray(paths) ? paths : []));
 ipcMain.handle("project:save", async (_event, { document, projectPath, saveAs }) => {
   let target = projectPath;
@@ -189,7 +198,12 @@ function buildMenu() {
       { label: "撤销", accelerator: "CmdOrCtrl+Z", click: () => sendCommand("undo") },
       { label: "重做", accelerator: "Shift+CmdOrCtrl+Z", click: () => sendCommand("redo") },
       { type: "separator" },
-      { role: "cut" }, { role: "copy" }, { role: "paste" }, { role: "selectAll" },
+      // Clipboard items also route through the renderer: text fields keep native behaviour, clips get clip copy/paste.
+      { label: "剪切", accelerator: "CmdOrCtrl+X", click: () => sendCommand("cut") },
+      { label: "复制", accelerator: "CmdOrCtrl+C", click: () => sendCommand("copy") },
+      { label: "粘贴", accelerator: "CmdOrCtrl+V", click: () => sendCommand("paste") },
+      { label: "复制并粘贴", accelerator: "CmdOrCtrl+D", click: () => sendCommand("duplicate") },
+      { role: "selectAll" },
     ] },
     { role: "viewMenu" },
     { role: "windowMenu" },

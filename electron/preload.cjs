@@ -22,6 +22,7 @@ contextBridge.exposeInMainWorld("dashCutDesktop", {
   saveRecording: (bytes) => ipcRenderer.invoke("recording:save", bytes),
   requestMicrophone: () => ipcRenderer.invoke("media:microphone"),
   registerMedia: (paths) => ipcRenderer.invoke("media:register", paths),
+  writeExportLayer: (bytes) => ipcRenderer.invoke("export:write-layer", bytes),
   saveProject: (request) => ipcRenderer.invoke("project:save", request),
   openProject: (projectPath) => ipcRenderer.invoke("project:open", projectPath),
   recentProjects: () => ipcRenderer.invoke("project:recent"),

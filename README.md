@@ -62,6 +62,14 @@ Windows x64 releases produce an unsigned one-click `.exe` without credentials; W
 4. Select a clip to edit it in the right-hand panel: picture (scale, position, rotation, opacity, mirror, crop), audio (volume, fades, effects), speed, in/out animations, colour adjustment and AI effects. Preview and export use the same settings.
 5. Click the cover tile at the left of the main track to design a 1280 × 720 thumbnail.
 
+### Keyframes, titles, transitions and speed curves
+
+- **Keyframes:** in **Picture** (position, scale, rotation, opacity) and **Audio** (volume), click ◆ to add a keyframe at the playhead; changing a value with keyframes present edits the one at the playhead. ‹ › jump between keyframes, the easing menu picks linear, ease-in, ease-out, ease-in-out or hold, and diamonds mark keyframes on the timeline.
+- **Titles:** the **Text** tab adds styled titles (headline, subtitle, outline, banner, tag, serif) at the playhead on an overlay track. Edit text, font, size, colours, outline, background and shadow in the right panel. Preview and export render titles with the same code.
+- **Transitions:** select a main-track clip, open **Animation** and choose crossfade, dip to black, wipe or slide to the next clip. Transitions use spare footage on both sides of the cut and fall back to a dip when there isn't enough.
+- **Speed curves:** in **Speed**, pick ramp up, ramp down, montage, hero, bullet time or flash, then drag the points. Audio keeps its pitch.
+- **Keyboard:** J/K/L shuttle (press again for 2× and 4×), ←/→ step one frame (⇧ for 10), ⌘C/⌘X/⌘V copy, cut and paste clips at the playhead, ⌘D duplicates. Drag on empty timeline space to marquee-select.
+
 ### Edit by transcript and clean up talking-head takes
 
 1. Open the **Transcript** tab and click **Recognise transcript**. Add names, brands or jargon under **Vocabulary** in the captions tab so the local model spells them correctly.

@@ -1,6 +1,9 @@
 // Pure project model and timeline operations shared by the editor UI and its tests.
+import { curveAt, evaluateKeyframes, meanSpeed, outputFractionForSource, curveIntegral, shiftKeyframes, sliceCurve } from "./motion.ts";
+import type { SpeedPoint } from "./motion.ts";
 
-export type MediaKind = "video" | "image" | "gif" | "audio";
+/** "text" assets are placeholders for title clips; the content lives on the clip. */
+export type MediaKind = "video" | "image" | "gif" | "audio" | "text";
 
 export type Asset = {
   id: string;
@@ -40,6 +43,28 @@ export type Clip = {
   animationIn: { type: AnimationType; duration: number };
   animationOut: { type: AnimationType; duration: number };
   audio: ClipAudioSettings;
+  keyframes?: VisualKeyframes;
+  /** Speed multiplier over the clip's output, on top of `speed`. */
+  speedCurve?: SpeedPoint[];
+  /** Transition into the next adjacent clip on the main track. */
+  transitionOut?: { type: TransitionType; duration: number };
+  text?: TextStyle;
+};
+
+export type TransitionType = "crossfade" | "dip" | "wipe" | "slide";
+export type TextStyle = {
+  content: string;
+  fontFamily: string;
+  fontSize: number; // px at 1080p
+  color: string;
+  bold: boolean;
+  italic: boolean;
+  align: "left" | "center" | "right";
+  strokeColor: string;
+  strokeWidth: number;
+  backgroundColor: string;
+  backgroundOpacity: number; // 0..1
+  shadow: boolean;
 };
 
 export type Marker = { id: string; time: number };
@@ -92,7 +117,13 @@ export function defaultClipSettings(): Omit<Clip, "id" | "assetId" | "trackId" |
 }
 
 export function clipDuration(clip: Clip) {
-  return (clip.out - clip.in) / clip.speed;
+  return (clip.out - clip.in) / (clip.speed * (clip.speedCurve ? meanSpeed(clip.speedCurve) : 1));
+}
+
+/** Current speed multiplier at a timeline time, including the speed curve. */
+export function speedAt(clip: Clip, time: number) {
+  if (!clip.speedCurve) return clip.speed;
+  return clip.speed * curveAt(clip.speedCurve, Math.max(0, Math.min(1, (time - clip.start) / clipDuration(clip))));
 }
 
 export function clipEnd(clip: Clip) {
@@ -113,13 +144,16 @@ export function trackClips(project: Project, trackId: string) {
 
 /** Stills, freeze frames and GIFs can be stretched freely; videos and audio are bounded by the source. */
 export function isStretchable(clip: Clip, asset: Asset | undefined) {
-  return clip.freezeAt !== null || asset?.kind === "image" || asset?.kind === "gif";
+  return clip.freezeAt !== null || asset?.kind === "image" || asset?.kind === "gif" || asset?.kind === "text";
 }
 
 /** Maps a timeline time inside the clip to the source time that should be shown. */
 export function sourceTimeAt(clip: Clip, time: number) {
   if (clip.freezeAt !== null) return clip.freezeAt;
-  const offset = Math.max(0, time - clip.start) * clip.speed;
+  const elapsed = Math.max(0, time - clip.start);
+  const offset = clip.speedCurve
+    ? (clip.out - clip.in) * (curveIntegral(clip.speedCurve, Math.min(1, elapsed / clipDuration(clip))) / meanSpeed(clip.speedCurve))
+    : elapsed * clip.speed;
   return clip.reverse ? Math.max(clip.in, clip.out - offset) : Math.min(clip.out, clip.in + offset);
 }
 
@@ -181,19 +215,26 @@ export function clipAt(project: Project, trackId: string, time: number) {
 export function splitClip(project: Project, clipId: string, time: number): { project: Project; rightId: string | null } {
   const clip = project.clips.find((item) => item.id === clipId);
   if (!clip || time <= clip.start + minClipDuration || time >= clipEnd(clip) - minClipDuration) return { project, rightId: null };
-  const elapsed = (time - clip.start) * clip.speed;
+  const fraction = (time - clip.start) / clipDuration(clip);
+  const source = sourceTimeAt(clip, time);
   const rightId = uid("clip");
   let left: Clip;
   let right: Clip;
   if (clip.reverse) {
-    const cut = clip.out - elapsed;
-    left = { ...clip, in: cut };
-    right = { ...clip, id: rightId, start: time, out: cut };
+    left = { ...clip, in: source };
+    right = { ...clip, id: rightId, start: time, out: source };
   } else {
-    const cut = clip.in + elapsed;
-    left = { ...clip, out: cut };
-    right = { ...clip, id: rightId, start: time, in: cut };
+    left = { ...clip, out: source };
+    right = { ...clip, id: rightId, start: time, in: source };
   }
+  // Each half keeps its part of the speed curve and the keyframes keep their absolute positions.
+  if (clip.speedCurve) {
+    left = { ...left, speedCurve: sliceCurve(clip.speedCurve, 0, fraction) };
+    right = { ...right, speedCurve: sliceCurve(clip.speedCurve, fraction, 1) };
+  }
+  if (clip.keyframes) right = { ...right, keyframes: Object.fromEntries(Object.entries(clip.keyframes).map(([key, points]) => [key, shiftKeyframes(points, clip.start - time)])) };
+  if (clip.audio.volumeKeyframes) right = { ...right, audio: { ...right.audio, volumeKeyframes: shiftKeyframes(clip.audio.volumeKeyframes, clip.start - time) } };
+  left = { ...left, transitionOut: undefined };
   // Animations belong to the outer edges of the original clip.
   left = { ...left, animationOut: { ...left.animationOut, type: "none" } };
   right = { ...right, animationIn: { ...right.animationIn, type: "none" } };
@@ -204,12 +245,16 @@ export function splitClip(project: Project, clipId: string, time: number): { pro
 export function trimAt(project: Project, clipId: string, time: number, side: "left" | "right", options: EditOptions): Project {
   const clip = project.clips.find((item) => item.id === clipId);
   if (!clip || time <= clip.start + minClipDuration / 2 || time >= clipEnd(clip) - minClipDuration / 2) return project;
-  const elapsed = (time - clip.start) * clip.speed;
+  const source = sourceTimeAt(clip, time);
+  const fraction = (time - clip.start) / clipDuration(clip);
   let next: Clip;
   if (side === "left") {
-    next = clip.reverse ? { ...clip, out: clip.out - elapsed, start: time } : { ...clip, in: clip.in + elapsed, start: time };
+    next = clip.reverse ? { ...clip, out: source, start: time } : { ...clip, in: source, start: time };
+    if (clip.speedCurve) next = { ...next, speedCurve: sliceCurve(clip.speedCurve, fraction, 1) };
+    if (clip.keyframes) next = { ...next, keyframes: Object.fromEntries(Object.entries(clip.keyframes).map(([key, points]) => [key, shiftKeyframes(points, clip.start - time)])) };
   } else {
-    next = clip.reverse ? { ...clip, in: clip.out - elapsed } : { ...clip, out: clip.in + elapsed };
+    next = clip.reverse ? { ...clip, in: source } : { ...clip, out: source };
+    if (clip.speedCurve) next = { ...next, speedCurve: sliceCurve(clip.speedCurve, 0, fraction) };
   }
   const after = { ...project, clips: project.clips.map((item) => item.id === clipId ? next : item) };
   // Left trims move the kept content, so attachments from the cut onwards follow it.
@@ -227,7 +272,7 @@ export function updateClip(project: Project, clipId: string, patch: Partial<Clip
   const clip = project.clips.find((item) => item.id === clipId);
   if (!clip) return project;
   const after = { ...project, clips: project.clips.map((item) => item.id === clipId ? { ...item, ...patch } : item) };
-  const timingChanged = ["in", "out", "speed", "start"].some((key) => key in patch);
+  const timingChanged = ["in", "out", "speed", "start", "speedCurve"].some((key) => key in patch);
   if (!timingChanged) return after;
   // A left-edge trim moves the remaining content; everything else changes length at the old end.
   const next = after.clips.find((item) => item.id === clipId)!;
@@ -353,10 +398,19 @@ export function snapCandidates(project: Project, playhead: number, ignoreId?: st
 
 /** Evaluates transform and opacity including in/out animations, matching the exporter. */
 export function evaluateVisual(clip: Clip, time: number) {
-  let { x, y, scale, opacity } = clip.transform;
   const local = time - clip.start;
+  const keyframes = clip.keyframes ?? {};
+  let x = evaluateKeyframes(keyframes.x, local, clip.transform.x);
+  let y = evaluateKeyframes(keyframes.y, local, clip.transform.y);
+  let scale = evaluateKeyframes(keyframes.scale, local, clip.transform.scale);
+  let opacity = evaluateKeyframes(keyframes.opacity, local, clip.transform.opacity);
+  const rotation = evaluateKeyframes(keyframes.rotation, local, clip.transform.rotation);
+  // Visible fraction of the layer box from the left / right edge for wipe animations.
+  let wipe: { from: "left" | "right"; visible: number } | null = null;
   const length = clipDuration(clip);
   const apply = (type: AnimationType, p: number) => {
+    if (type === "wipe-right") wipe = { from: "left", visible: p };
+    if (type === "wipe-left") wipe = { from: "right", visible: p };
     if (type === "fade") opacity *= p;
     if (type === "slide-left") x -= 1 - p;
     if (type === "slide-right") x += 1 - p;
@@ -369,7 +423,7 @@ export function evaluateVisual(clip: Clip, time: number) {
   const outLength = Math.min(clip.animationOut.duration, length);
   if (clip.animationIn.type !== "none" && local < inLength) apply(clip.animationIn.type, Math.max(0, local / inLength));
   if (clip.animationOut.type !== "none" && local > length - outLength) apply(clip.animationOut.type, Math.max(0, (length - local) / outLength));
-  return { x, y, scale, rotation: clip.transform.rotation, opacity: Math.max(0, Math.min(1, opacity)) };
+  return { x, y, scale, rotation, opacity: Math.max(0, Math.min(1, opacity)), wipe: wipe as { from: "left" | "right"; visible: number } | null };
 }
 
 /** Volume after fades at a timeline time. */
@@ -377,7 +431,7 @@ export function evaluateVolume(clip: Clip, time: number) {
   if (clip.audio.muted) return 0;
   const local = time - clip.start;
   const length = clipDuration(clip);
-  let gain = clip.audio.volume;
+  let gain = evaluateKeyframes(clip.audio.volumeKeyframes, local, clip.audio.volume);
   if (clip.audio.fadeIn > 0 && local < clip.audio.fadeIn) gain *= Math.max(0, local / clip.audio.fadeIn);
   if (clip.audio.fadeOut > 0 && local > length - clip.audio.fadeOut) gain *= Math.max(0, (length - local) / clip.audio.fadeOut);
   return gain;
@@ -388,27 +442,137 @@ export function canvasSize(ratio: "16:9" | "9:16", resolution: 720 | 1080 | 2160
   return ratio === "16:9" ? { width: long, height: resolution } : { width: resolution, height: long };
 }
 
+function shiftClipTimes(clip: Clip, delta: number): Clip {
+  const keyframes = clip.keyframes && Object.fromEntries(Object.entries(clip.keyframes).map(([key, points]) => [key, shiftKeyframes(points, delta)]));
+  return { ...clip, keyframes, audio: { ...clip.audio, volumeKeyframes: shiftKeyframes(clip.audio.volumeKeyframes, delta) } };
+}
+
+/** Extra timeline seconds a clip can grow by at its end (after) or start (before) from unused source. */
+function handle(clip: Clip, asset: Asset | undefined, side: "after" | "before") {
+  if (isStretchable(clip, asset)) return Infinity;
+  if (clip.speedCurve || !asset) return 0;
+  const room = (side === "after") !== clip.reverse ? asset.duration - clip.out : clip.in;
+  return Math.max(0, room / clip.speed);
+}
+
+function extendClip(clip: Clip, asset: Asset | undefined, amount: number, edge: "start" | "end"): Clip {
+  const stretch = isStretchable(clip, asset);
+  const source = amount * clip.speed;
+  if (edge === "end") {
+    if (stretch || !clip.reverse) return { ...clip, out: clip.out + (stretch ? amount : source) };
+    return { ...clip, in: clip.in - source };
+  }
+  const moved = shiftClipTimes({ ...clip, start: clip.start - amount }, amount);
+  if (stretch) return { ...moved, out: moved.out + amount };
+  return clip.reverse ? { ...moved, out: moved.out + source } : { ...moved, in: moved.in - source };
+}
+
+/**
+ * Clips as drawn and heard. A transition between adjacent main-track clips overlaps them around the
+ * cut (using unused source on both sides) and animates the incoming clip; without enough source it
+ * falls back to a dip through black. Draw order on a track follows start time.
+ */
+export function renderClips(project: Project, assets: Map<string, Asset>): Clip[] {
+  const result = new Map(project.clips.map((clip) => [clip.id, clip]));
+  const mainClips = trackClips(project, mainTrack(project).id);
+  for (let index = 0; index < mainClips.length - 1; index += 1) {
+    const a = mainClips[index];
+    const b = mainClips[index + 1];
+    if (!a.transitionOut || Math.abs(clipEnd(a) - b.start) > 0.01) continue;
+    const duration = Math.min(a.transitionOut.duration, clipDuration(a), clipDuration(b));
+    const half = a.transitionOut.type === "dip" ? 0 : Math.min(duration / 2, handle(a, assets.get(a.assetId), "after"), handle(b, assets.get(b.assetId), "before"));
+    const currentA = result.get(a.id)!;
+    const currentB = result.get(b.id)!;
+    if (half < 0.05) {
+      const fade = duration / 2;
+      result.set(a.id, { ...currentA, animationOut: { type: "fade", duration: fade }, audio: { ...currentA.audio, fadeOut: Math.max(currentA.audio.fadeOut, fade) } });
+      result.set(b.id, { ...currentB, animationIn: { type: "fade", duration: fade }, audio: { ...currentB.audio, fadeIn: Math.max(currentB.audio.fadeIn, fade) } });
+      continue;
+    }
+    const overlap = half * 2;
+    const extendedA = extendClip(currentA, assets.get(a.assetId), half, "end");
+    const extendedB = extendClip(currentB, assets.get(b.assetId), half, "start");
+    const type = a.transitionOut.type;
+    result.set(a.id, { ...extendedA, animationOut: type === "slide" ? { type: "slide-left", duration: overlap } : { ...extendedA.animationOut, type: "none" }, audio: { ...extendedA.audio, fadeOut: overlap } });
+    result.set(b.id, { ...extendedB, animationIn: { type: type === "crossfade" ? "fade" : type === "wipe" ? "wipe-right" : "slide-right", duration: overlap }, audio: { ...extendedB.audio, fadeIn: overlap } });
+  }
+  return project.clips.map((clip) => result.get(clip.id)!);
+}
+
+/** Scale that cancels contain-fit so a text box keeps its designed size (font px at 1080p). */
+export function textBaseScale(boxWidth: number, boxHeight: number, ratio: "16:9" | "9:16") {
+  const aspect = ratio === "16:9" ? 16 / 9 : 9 / 16;
+  return 1 / Math.min((1080 * aspect) / boxWidth, 1080 / boxHeight);
+}
+
+export type TextLayer = { path: string; width: number; height: number; boxWidth: number; boxHeight: number };
+const curveChunks = 24;
+
 /** Flattens the project into the exporter contract (visual layers bottom → top). */
-export function toComposition(project: Project, assets: Asset[], settings: { ratio: "16:9" | "9:16"; resolution: 720 | 1080 | 2160; fps: 30 | 60; platform: "bilibili" | "youtube"; subtitleStyle: Record<string, string | number>; subtitleMode: "zh" | "en" | "both" }): CompositionRequest {
+export function toComposition(project: Project, assets: Asset[], settings: { ratio: "16:9" | "9:16"; resolution: 720 | 1080 | 2160; fps: 30 | 60; platform: "bilibili" | "youtube"; subtitleStyle: Record<string, string | number>; subtitleMode: "zh" | "en" | "both" }, textLayers: Map<string, TextLayer> = new Map()): CompositionRequest {
   const byId = new Map(assets.map((asset) => [asset.id, asset]));
   const { width, height } = canvasSize(settings.ratio, settings.resolution);
+  const drawn = renderClips(project, byId);
+  const clipsOn = (trackId: string) => drawn.filter((clip) => clip.trackId === trackId).sort((a, b) => a.start - b.start);
+
+  // A speed curve is exported as short constant-speed pieces; atempo keeps the pitch.
+  const pieces = (clip: Clip): Clip[] => {
+    if (!clip.speedCurve || clip.freezeAt !== null) return [clip];
+    const length = clipDuration(clip);
+    return Array.from({ length: curveChunks }, (_, index) => {
+      const t0 = clip.start + (length * index) / curveChunks;
+      const t1 = clip.start + (length * (index + 1)) / curveChunks;
+      const s0 = sourceTimeAt(clip, t0);
+      const s1 = sourceTimeAt(clip, t1);
+      const shifted = shiftClipTimes(clip, clip.start - t0);
+      return {
+        ...shifted,
+        start: t0,
+        in: Math.min(s0, s1),
+        out: Math.max(s0, s1),
+        speed: Math.abs(s1 - s0) / (t1 - t0),
+        speedCurve: undefined,
+        animationIn: index === 0 ? clip.animationIn : { ...clip.animationIn, type: "none" },
+        animationOut: index === curveChunks - 1 ? clip.animationOut : { ...clip.animationOut, type: "none" },
+        audio: { ...shifted.audio, fadeIn: index === 0 ? clip.audio.fadeIn : 0, fadeOut: index === curveChunks - 1 ? clip.audio.fadeOut : 0 },
+      };
+    });
+  };
+
   const videoTracks = project.tracks.filter((track) => track.kind === "video" && !track.hidden).reverse();
-  const visuals: CompositionVisual[] = videoTracks.flatMap((track) => trackClips(project, track.id).flatMap((clip) => {
+  const visuals: CompositionVisual[] = videoTracks.flatMap((track) => clipsOn(track.id).flatMap(pieces).flatMap((clip) => {
     const asset = byId.get(clip.assetId);
     if (!asset || asset.kind === "audio") return [];
+    let path = asset.sourcePath;
+    let kind: CompositionVisual["kind"] = asset.kind === "text" ? "rgba" : asset.kind;
+    let rgba: CompositionVisual["rgba"];
+    let transform = clip.transform;
+    let keyframes = clip.keyframes;
+    if (asset.kind === "text") {
+      const layer = textLayers.get(clip.id);
+      if (!layer) return [];
+      path = layer.path;
+      kind = "rgba";
+      rgba = { width: layer.width, height: layer.height };
+      const base = textBaseScale(layer.boxWidth, layer.boxHeight, settings.ratio);
+      transform = { ...transform, scale: transform.scale * base };
+      if (keyframes?.scale) keyframes = { ...keyframes, scale: keyframes.scale.map((point) => ({ ...point, value: point.value * base })) };
+    }
     return [{
-      path: asset.sourcePath,
-      kind: asset.kind,
+      path,
+      kind,
+      rgba,
       start: clip.start,
       in: clip.in,
       out: clip.out,
-      speed: asset.kind === "image" ? 1 : clip.speed,
+      speed: asset.kind === "image" || asset.kind === "text" ? 1 : clip.speed,
       reverse: clip.reverse,
       freezeAt: clip.freezeAt,
       mirror: clip.mirror,
       rotate90: clip.rotate90,
       crop: clip.crop,
-      transform: clip.transform,
+      transform,
+      keyframes,
       adjust: clip.adjust,
       effects: clip.effects,
       chromaKey: clip.chromaKey,
@@ -418,7 +582,7 @@ export function toComposition(project: Project, assets: Asset[], settings: { rat
       audio: clip.audio,
     }];
   }));
-  const audios: CompositionAudio[] = project.tracks.filter((track) => track.kind === "audio" && !track.muted).flatMap((track) => trackClips(project, track.id).flatMap((clip) => {
+  const audios: CompositionAudio[] = project.tracks.filter((track) => track.kind === "audio" && !track.muted).flatMap((track) => clipsOn(track.id).flatMap(pieces).flatMap((clip) => {
     const asset = byId.get(clip.assetId);
     if (!asset || !asset.hasAudio) return [];
     return [{ path: asset.sourcePath, start: clip.start, in: clip.in, out: clip.out, speed: clip.speed, audio: clip.audio }];
@@ -432,6 +596,11 @@ export function sourceRangeToTimeline(clip: Clip, sourceStart: number, sourceEnd
   const start = Math.max(sourceStart, clip.in);
   const end = Math.min(sourceEnd, clip.out);
   if (end <= start) return null;
+  if (clip.speedCurve) {
+    const length = clipDuration(clip);
+    const at = (source: number) => clip.start + length * outputFractionForSource(clip.speedCurve!, (source - clip.in) / (clip.out - clip.in));
+    return { start: at(start), end: at(end), sourceStart: start, sourceEnd: end };
+  }
   return { start: clip.start + (start - clip.in) / clip.speed, end: clip.start + (end - clip.in) / clip.speed, sourceStart: start, sourceEnd: end };
 }
 
@@ -455,7 +624,8 @@ function cutSubtitles(subtitles: Subtitle[], start: number, end: number) {
 export function cutSourceRanges(project: Project, cuts: Array<{ clipId: string; start: number; end: number }>, options: EditOptions): Project {
   const spans = cuts.flatMap((cut) => {
     const clip = project.clips.find((item) => item.id === cut.clipId);
-    const range = clip && sourceRangeToTimeline(clip, cut.start, cut.end);
+    // Speed-curved clips map source to timeline non-linearly; transcript cuts skip them.
+    const range = clip && !clip.speedCurve && sourceRangeToTimeline(clip, cut.start, cut.end);
     return clip && range && range.end - range.start > 0.02 ? [{ clipId: clip.id, trackId: clip.trackId, start: range.start, end: range.end }] : [];
   });
   // Merge overlapping spans per track, then cut from the end so earlier times stay valid.

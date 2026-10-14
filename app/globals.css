@@ -460,3 +460,40 @@ button { cursor: pointer; }
 .agent-input textarea { resize: none; border: 1px solid #343a46; background: #0e1117; color: white; border-radius: 8px; padding: 8px; font: inherit; font-size: 11px; }
 .agent-input button { align-self: end; padding: 8px 12px; }
 .agent-stop { display: flex; align-items: center; gap: 4px; border: 0; border-radius: 8px; background: #e5566b; color: white; font-size: 11px; }
+
+/* ===== Keyframes, curves, transitions, titles ===== */
+.inspector-slider.keyed { grid-template-columns: 52px 1fr 40px 16px 54px; }
+.keyframe-buttons { display: flex; align-items: center; gap: 1px; }
+.keyframe-buttons button { border: 0; background: transparent; color: #6d7584; width: 16px; height: 18px; padding: 0; font-size: 12px; }
+.keyframe-buttons button:disabled { opacity: .25; }
+.keyframe-buttons .diamond { font-size: 11px; color: #5c6473; }
+.keyframe-buttons .diamond.has { color: #9aa7c7; }
+.keyframe-buttons .diamond.on { color: #ffcc45; text-shadow: 0 0 6px rgba(255, 204, 69, .6); }
+.inspector-body h4 small { margin-left: 6px; color: #5f6776; font-size: 8px; font-weight: 400; }
+.easing-row, .text-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 8px 0; color: #8f97a6; font-size: 9px; }
+.easing-row select, .text-row select { flex: 1; max-width: 160px; border: 1px solid #343a46; background: #0e1117; color: white; border-radius: 6px; padding: 5px; font-size: 10px; }
+.curve-presets { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; margin-bottom: 8px; }
+.curve-presets button { border: 1px solid #2c323e; background: #171b23; color: #b8bfcc; border-radius: 6px; padding: 6px 0; font-size: 9px; }
+.curve-presets button.active { border-color: #6d8dff; background: #1d2540; color: white; }
+.curve-editor { width: 100%; height: 96px; border: 1px solid #2c323e; border-radius: 8px; background: #0e1117; touch-action: none; }
+.curve-editor path { fill: none; stroke: #8aa5ff; stroke-width: 2; }
+.curve-editor circle { fill: #ffcc45; stroke: #13171f; stroke-width: 2; cursor: ns-resize; }
+.curve-baseline { stroke: #343a46; stroke-dasharray: 3 3; }
+.animation-grid.transitions { grid-template-columns: repeat(5, 1fr); }
+.text-editor textarea { width: 100%; resize: vertical; border: 1px solid #343a46; background: #0e1117; color: white; border-radius: 8px; padding: 8px; font: inherit; font-size: 12px; }
+.text-toggles { display: grid; grid-template-columns: repeat(6, 1fr); gap: 4px; margin: 8px 0; }
+.text-toggles button { border: 1px solid #2c323e; background: #171b23; color: #b8bfcc; border-radius: 6px; padding: 5px 0; font-size: 10px; }
+.text-toggles button.active { border-color: #6d8dff; background: #1d2540; color: white; }
+.text-colors { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin: 8px 0; }
+.text-colors label { display: flex; align-items: center; justify-content: space-between; padding: 5px 7px; border-radius: 6px; background: #171b23; color: #8f97a6; font-size: 9px; }
+.text-colors input { width: 26px; height: 20px; border: 1px solid #3a414e; background: transparent; border-radius: 4px; padding: 1px; }
+.text-presets-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.text-presets-grid button { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 12px 4px; border: 1px solid #2a303c; border-radius: 8px; background: #151922; color: #b9c0cc; font-size: 9px; }
+.text-presets-grid button:hover { border-color: #6d8dff; }
+.text-presets-grid b { font-size: 20px; padding: 0 6px; border-radius: 4px; }
+.timeline-clip.text { background: #3b2f5c; border-color: #7a64c4; }
+.clip-text { display: grid; place-items: center start; padding-left: 8px; color: rgba(255,255,255,.18); font: 700 22px Georgia, serif; }
+.clip-keyframe { position: absolute; bottom: 3px; width: 7px; height: 7px; margin-left: -3.5px; background: #ffcc45; transform: rotate(45deg); border: 1px solid #13171f; pointer-events: none; z-index: 2; }
+.clip-transition { position: absolute; top: 50%; z-index: 4; width: 18px; height: 18px; margin: -9px 0 0 -9px; border: 1px solid #a7b8ff; border-radius: 5px; background: #2f3d73; color: white; font-size: 10px; line-height: 1; padding: 0; }
+.timeline-marquee { position: fixed; z-index: 30; border: 1px solid #8aa5ff; background: rgba(109, 141, 255, .12); pointer-events: none; }
+.shuttle-badge { margin-left: 8px; padding: 1px 5px; border-radius: 4px; background: #33427a; color: #dbe3ff; font-style: normal; }

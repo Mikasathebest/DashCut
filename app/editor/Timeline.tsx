@@ -3,7 +3,7 @@
 import { CSSProperties, memo, PointerEvent as ReactPointerEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "./icons";
 import { SubtitleMode } from "./captions";
-import { Asset, Clip, clipDuration, clipEnd, isStretchable, minClipDuration, Project, snapCandidates, snapTime, Subtitle, Track } from "./model";
+import { Asset, Clip, clipDuration, clipEnd, isStretchable, minClipDuration, Project, snapCandidates, snapTime, Subtitle, Track, trackClips } from "./model";
 
 export type TimelineMode = "select" | "blade";
 export type DropTarget = string | "new-top" | "new-bottom";
@@ -21,12 +21,12 @@ export const MAX_ZOOM = 400;
 export const clampZoom = (zoom: number) => Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom));
 const minCaptionDuration = 0.2;
 
-export function formatClock(value: number, withFrames = true) {
+export function formatClock(value: number, withFrames = true, fps = 30) {
   const safe = Number.isFinite(value) ? Math.max(0, value) : 0;
   const min = Math.floor(safe / 60);
   const sec = Math.floor(safe % 60);
   const base = `${String(min).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
-  return withFrames ? `${base}:${String(Math.floor((safe % 1) * 30)).padStart(2, "0")}` : base;
+  return withFrames ? `${base}:${String(Math.min(fps - 1, Math.floor((safe % 1) * fps + 1e-6))).padStart(2, "0")}` : base;
 }
 
 /* ---------------------------------------------------------------- toolbar */
@@ -147,6 +147,7 @@ type DragState =
   | { type: "move"; clipId: string; pointerX: number; originStart: number; start: number; target: DropTarget; moved: boolean }
   | { type: "trim"; clipId: string; edge: "left" | "right"; pointerX: number; patch: Partial<Clip> }
   | { type: "scrub" }
+  | { type: "marquee"; x0: number; y0: number; x1: number; y1: number; additive: boolean }
   | { type: "caption"; id: number; edge: "left" | "right" | null; pointerX: number; start: number; end: number; moved: boolean };
 
 type TimelineProps = {
@@ -161,6 +162,7 @@ type TimelineProps = {
   zoom: number;
   settings: TimelineSettings;
   coverImage: string;
+  fps: number;
   draggingAssetId: string | null;
   onSeek: (time: number) => void;
   onHover: (time: number | null) => void;
@@ -174,6 +176,7 @@ type TimelineProps = {
   onZoom: (zoom: number) => void;
   onCover: () => void;
   onViewport: (width: number) => void;
+  onTransition: (clipId: string) => void;
   subtitleMode: SubtitleMode;
   selectedSubtitle: number | null;
   onSelectSubtitle: (id: number | null) => void;
@@ -250,6 +253,7 @@ export function Timeline(props: TimelineProps) {
       const state = dragRef.current;
       if (!state) return;
       if (state.type === "scrub") return propsRef.current.onSeek(timeFromClientX(event.clientX));
+      if (state.type === "marquee") return update({ ...state, x1: event.clientX, y1: event.clientY });
       if (state.type === "caption") return update(dragCaption(state, event.clientX));
       const clip = project.clips.find((item) => item.id === state.clipId);
       if (!clip) return;
@@ -300,6 +304,22 @@ export function Timeline(props: TimelineProps) {
       dragRef.current = null;
       setDrag(null);
       if (!state || state.type === "scrub") return;
+      if (state.type === "marquee") {
+        const moved = Math.abs(state.x1 - state.x0) > 4 || Math.abs(state.y1 - state.y0) > 4;
+        if (!moved) {
+          if (!state.additive) propsRef.current.onSelect([]);
+          return propsRef.current.onSeek(timeFromClientX(state.x0));
+        }
+        // Select every clip whose box intersects the dragged rectangle.
+        const [left, right] = [Math.min(state.x0, state.x1), Math.max(state.x0, state.x1)];
+        const [top, bottom] = [Math.min(state.y0, state.y1), Math.max(state.y0, state.y1)];
+        const hits = [...document.querySelectorAll<HTMLElement>(".timeline-clip[data-clip-id]")].filter((element) => {
+          const rect = element.getBoundingClientRect();
+          return rect.right > left && rect.left < right && rect.bottom > top && rect.top < bottom;
+        }).map((element) => element.dataset.clipId!);
+        const current = propsRef.current.selection;
+        return propsRef.current.onSelect(state.additive ? [...new Set([...current, ...hits])] : hits);
+      }
       if (state.type === "caption") {
         if (state.moved) propsRef.current.onSubtitleChange(state.id, { start: state.start, end: state.end });
         return;
@@ -358,10 +378,14 @@ export function Timeline(props: TimelineProps) {
     const isAudio = asset.kind === "audio";
     const waveHeight = isAudio ? height - 14 : asset.hasAudio && shown.freezeAt === null ? Math.round((height - 2) * settings.waveformRatio) : 0;
     const style: CSSProperties = { left, width, height: height - 4 };
-    return <div key={clip.id} className={`timeline-clip ${isAudio ? "audio" : asset.kind}${selection.includes(clip.id) ? " selected" : ""}${moving ? " moving" : ""}${mode === "blade" ? " blade" : ""}`} style={style} onPointerDown={(event) => startClipPointer(event, clip, track)}>
-      {!isAudio && <Filmstrip asset={asset} clip={shown} width={width} height={height - 4 - waveHeight} />}
+    // Keyframe positions of every animated property, shown as diamonds on the clip.
+    const keyTimes = [...new Set([...Object.values(shown.keyframes ?? {}), shown.audio.volumeKeyframes].flatMap((points) => points?.map((point) => Math.round(point.time * 100) / 100) ?? []))].filter((time) => time >= 0 && time <= clipDuration(shown));
+    const isText = asset.kind === "text";
+    return <div key={clip.id} data-clip-id={clip.id} className={`timeline-clip ${isAudio ? "audio" : asset.kind}${selection.includes(clip.id) ? " selected" : ""}${moving ? " moving" : ""}${mode === "blade" ? " blade" : ""}`} style={style} onPointerDown={(event) => startClipPointer(event, clip, track)}>
+      {isText ? <div className="clip-text" style={{ height: height - 4 }}>T</div> : !isAudio && <Filmstrip asset={asset} clip={shown} width={width} height={height - 4 - waveHeight} />}
       {waveHeight > 0 && <div className="clip-wave" style={{ height: waveHeight }}><Waveform asset={asset} clip={shown} width={width} height={waveHeight} /></div>}
-      <span className="clip-label">{shown.freezeAt !== null && <em>定格</em>}{shown.reverse && <em>倒放</em>}{shown.speed !== 1 && <em>{shown.speed}×</em>}{shown.audio.muted && <em>静音</em>}{asset.name.replace(/\.[^.]+$/, "")}<small>{clipDuration(shown).toFixed(1)}s</small></span>
+      <span className="clip-label">{shown.freezeAt !== null && <em>定格</em>}{shown.reverse && <em>倒放</em>}{shown.speedCurve ? <em>曲线变速</em> : shown.speed !== 1 && <em>{shown.speed}×</em>}{shown.audio.muted && <em>静音</em>}{isText ? (shown.text?.content.split("\n")[0] || "文本") : asset.name.replace(/\.[^.]+$/, "")}<small>{clipDuration(shown).toFixed(1)}s</small></span>
+      {keyTimes.map((time) => <i key={time} className="clip-keyframe" style={{ left: time * zoom }} />)}
       {!track.locked && <><i className="clip-edge left" data-edge="left" /><i className="clip-edge right" data-edge="right" /></>}
     </div>;
   }
@@ -450,7 +474,7 @@ export function Timeline(props: TimelineProps) {
   return <div className="timeline-scroll" ref={scrollRef} onPointerLeave={() => props.onHover(null)} onPointerMove={(event) => { if (toggles.previewAxis && !drag) props.onHover(timeFromClientX(event.clientX)); }}>
     <div className="timeline-content" style={{ width: contentWidth + origin }}>
       <div className="timeline-ruler" onPointerDown={(event) => { if (event.button !== 0) return; props.onSeek(timeFromClientX(event.clientX)); beginDrag({ type: "scrub" }); }}>
-        <div className="track-header ruler-corner"><span>{formatClock(time)}</span></div>
+        <div className="track-header ruler-corner"><span>{formatClock(time, true, props.fps)}</span></div>
         <i className="track-lead" />
         <div className="ruler-lane" style={{ width: contentWidth }}>
           {ticks.map((tick) => <span key={tick} style={{ left: tick * zoom }}>{step < 1 ? `${tick.toFixed(1)}s` : formatClock(tick, false)}</span>)}
@@ -472,7 +496,9 @@ export function Timeline(props: TimelineProps) {
             </span>
           </div>
           <i className="track-lead">{track.main && <button className="cover-button" onClick={props.onCover} title="编辑封面" style={coverImage ? { backgroundImage: `url("${coverImage}")` } : undefined}><span>封面</span></button>}</i>
-          <div className="track-lane" style={{ width: contentWidth }} onPointerDown={(event) => { if (event.button !== 0) return; props.onSelect([]); props.onSeek(timeFromClientX(event.clientX)); }} onDragOver={(event) => onLaneDragOver(event, track.id)} onDragLeave={() => setAssetDrop(null)} onDrop={(event) => onLaneDrop(event, track.id)}>
+          <div className="track-lane" style={{ width: contentWidth }} onPointerDown={(event) => { if (event.button !== 0) return; beginDrag({ type: "marquee", x0: event.clientX, y0: event.clientY, x1: event.clientX, y1: event.clientY, additive: event.shiftKey || event.metaKey }); }} onDragOver={(event) => onLaneDragOver(event, track.id)} onDragLeave={() => setAssetDrop(null)} onDrop={(event) => onLaneDrop(event, track.id)}>
+            {track.main && trackClips(project, track.id).flatMap((clip, index, list) => clip.transitionOut && list[index + 1] && Math.abs(clipEnd(clip) - list[index + 1].start) < 0.01
+              ? [<button key={`transition-${clip.id}`} className="clip-transition" style={{ left: clipEnd(clip) * zoom }} title={`转场：${clip.transitionOut.duration.toFixed(1)}s，点击编辑`} onPointerDown={(event) => event.stopPropagation()} onClick={() => props.onTransition(clip.id)}>⧉</button>] : [])}
             {project.clips.filter((clip) => clip.trackId === track.id && !(drag?.type === "move" && drag.moved && drag.clipId === clip.id && drag.target !== track.id)).map((clip) => renderClip(clip, track, height))}
             {movingClip && movingTarget === track.id && movingClip.trackId !== track.id && renderClip(movingClip, track, height)}
             {assetDrop?.target === track.id && ghostLength > 0 && <i className="drop-ghost" style={{ left: assetDrop.start * zoom, width: ghostLength * zoom }} />}
@@ -484,7 +510,8 @@ export function Timeline(props: TimelineProps) {
       {captionRow("en")}
       {newZone("new-bottom")}
       <div className="timeline-playhead" style={{ left: origin + time * zoom }}><i /></div>
-      {toggles.previewAxis && hoverTime !== null && !drag && <div className="timeline-hoverline" style={{ left: origin + hoverTime * zoom }}><span>{formatClock(hoverTime)}</span></div>}
+      {toggles.previewAxis && hoverTime !== null && !drag && <div className="timeline-hoverline" style={{ left: origin + hoverTime * zoom }}><span>{formatClock(hoverTime, true, props.fps)}</span></div>}
+      {drag?.type === "marquee" && (Math.abs(drag.x1 - drag.x0) > 4 || Math.abs(drag.y1 - drag.y0) > 4) && <div className="timeline-marquee" style={{ left: Math.min(drag.x0, drag.x1), top: Math.min(drag.y0, drag.y1), width: Math.abs(drag.x1 - drag.x0), height: Math.abs(drag.y1 - drag.y0) }} />}
     </div>
   </div>;
 }

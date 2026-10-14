@@ -23,9 +23,8 @@ export type StoredAsset = {
   hasAudio: boolean;
 };
 
-/** Reserved for upcoming features so older files stay readable once they land. */
-export type KeyframeTrack = { property: string; keyframes: Array<{ time: number; value: number; easing?: string }> };
-export type StoredClip = Clip & { keyframes?: KeyframeTrack[]; speedCurve?: Array<{ x: number; y: number }> };
+/** Clips carry optional keyframes, speed curves, transitions and text; older files simply lack them. */
+export type StoredClip = Clip;
 
 export type ProjectDocument = {
   schemaVersion: number;

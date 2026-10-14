@@ -51,6 +51,10 @@ export function buildAliases(project: Project, assets: Asset[]): Aliases {
 function clipLine(clip: Clip, aliases: Aliases) {
   const defaults = defaultClipSettings();
   const parts = [`${aliases.clip.get(clip.id)} ${aliases.asset.get(clip.assetId)} start=${ms(clip.start)} end=${ms(clipEnd(clip))}`];
+  if (clip.text) parts.push(`text=${JSON.stringify(clip.text.content)}`);
+  if (clip.transitionOut) parts.push(`transition=${clip.transitionOut.type}:${ms(clip.transitionOut.duration)}`);
+  if (clip.speedCurve) parts.push("speedCurve");
+  if (clip.keyframes && Object.keys(clip.keyframes).length) parts.push(`keyframes=${Object.keys(clip.keyframes).join(",")}`);
   if (clip.freezeAt !== null) parts.push(`freeze=${ms(clip.freezeAt)}`);
   else parts.push(`src=${ms(clip.in)}-${ms(clip.out)}`);
   if (clip.speed !== 1) parts.push(`speed=${clip.speed}`);
