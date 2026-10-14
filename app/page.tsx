@@ -8,6 +8,7 @@ import { defaultTextStyle, rasterizeText, textPresets } from "./editor/text";
 import { computeReframe } from "./editor/reframe";
 import { analysisIssues, captionIssues, HealthIssue } from "./editor/health";
 import { HealthCheck } from "./editor/HealthCheck";
+import { Language, languageStorageKey, preferredLanguage, setLanguage, t } from "./i18n";
 import { LoudnessMeter } from "./editor/LoudnessMeter";
 import { buildDocument, EditorState, migrateDocument, ProjectDocument, readDocument } from "./editor/project-file";
 import {
@@ -78,6 +79,7 @@ function newProjectMeta() {
 
 export default function Home() {
   const [assets, setAssets] = useState<Asset[]>([]);
+  const [language, setLanguageState] = useState<Language>("zh");
   const [projectMeta, setProjectMeta] = useState(newProjectMeta);
   const [projectPath, setProjectPath] = useState("");
   const [savedFingerprint, setSavedFingerprint] = useState<string | null>(null);
@@ -193,6 +195,24 @@ export default function Home() {
   function redo() {
     setHistory((state) => state.future.length ? { past: [...state.past, state.present], present: state.future[0], future: state.future.slice(1), key: "", at: 0, revision: state.revision + 1 } : state);
   }
+
+  /* ------------------------------------------------------------ language */
+
+  function switchLanguage(next: Language) {
+    setLanguage(next);
+    try { localStorage.setItem(languageStorageKey, next); } catch { /* storage unavailable */ }
+    setLanguageState(next);
+    void window.dashCutDesktop?.setUiLanguage?.(next);
+  }
+
+  useEffect(() => {
+    const preferred = preferredLanguage();
+    setLanguage(preferred);
+    // Applied after mount so the server-rendered (Chinese) markup hydrates first.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setLanguageState(preferred);
+    void window.dashCutDesktop?.setUiLanguage?.(preferred);
+  }, []);
 
   /* ------------------------------------------------------------ AI settings and caption progress */
 
@@ -1574,7 +1594,8 @@ export default function Home() {
   const cropClip = cropOpen ? primaryClip : null;
   const cropAsset = cropClip ? assetMap.get(cropClip.assetId) : undefined;
 
-  return <main className="app-shell">
+  // Keyed by language so memoised panels re-render their text after switching.
+  return <main className="app-shell" key={language} lang={language === "zh" ? "zh-CN" : "en"}>
     <input ref={fileInputRef} className="hidden-input" type="file" accept="video/*,image/*,audio/*" multiple onChange={importFiles} />
     <header className="topbar">
       <div className="brand"><span className="brand-mark"><i></i><i></i></span><strong>DashCut <em>极剪</em></strong></div>
@@ -1591,7 +1612,7 @@ export default function Home() {
         </div>
         <div><input className="project-name" aria-label="项目名称" value={projectMeta.title} onChange={(event) => setProjectMeta((meta) => ({ ...meta, title: event.target.value }))} onBlur={(event) => { if (!event.target.value.trim()) setProjectMeta((meta) => ({ ...meta, title: "未命名项目" })); }} /><span>{dirty ? "未保存" : projectPath ? "已保存" : "未保存到磁盘"} · {formatClock(duration, false)} · {project.clips.length} 个片段</span></div>
       </div>
-      <div className="top-actions"><button className="ghost hide-mobile" onClick={() => setAboutOpen(true)}>关于与许可</button><button className={`agent-button${agentOpen ? " active" : ""}`} title="极剪助手（⌘J）" onClick={() => agentOpen ? setAgentOpen(false) : void openAgent()}>✦ 极剪助手</button><button className="export-button" onClick={() => setExportOpen(true)}>导出视频 <span>↗</span></button></div>
+      <div className="top-actions"><button className="language-toggle" title={t("切换界面语言")} onClick={() => switchLanguage(language === "zh" ? "en" : "zh")}><b className={language === "zh" ? "on" : ""}>中</b><b className={language === "en" ? "on" : ""}>EN</b></button><button className="ghost hide-mobile" onClick={() => setAboutOpen(true)}>关于与许可</button><button className={`agent-button${agentOpen ? " active" : ""}`} title="极剪助手（⌘J）" onClick={() => agentOpen ? setAgentOpen(false) : void openAgent()}>✦ 极剪助手</button><button className="export-button" onClick={() => setExportOpen(true)}>导出视频 <span>↗</span></button></div>
     </header>
 
     <section className="workspace">

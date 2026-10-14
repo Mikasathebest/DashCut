@@ -12,6 +12,7 @@ const { analyzeComposition, exportComposition } = require("./composition-export.
 const { detectScenes, detectSpeechSegments, extractWaveform } = require("./smart-edit.cjs");
 const { handleMediaScheme, registerMediaScheme } = require("./media-protocol.cjs");
 const { createAgentHost } = require("./agent-host.cjs");
+const { setLanguage, tr } = require("./i18n.cjs");
 const { createAutosave, createRecentList, findSiblings, loadProject, saveProject } = require("./project-store.cjs");
 
 registerMediaScheme(protocol);
@@ -21,7 +22,7 @@ let projectState = { dirty: false, id: "" };
 let closeConfirmed = false;
 const recent = () => createRecentList(path.join(app.getPath("userData"), "recent-projects.json"));
 const autosave = () => createAutosave(path.join(app.getPath("userData"), "autosave"));
-const projectFilters = [{ name: "DashCut 项目", extensions: ["dashcut"] }];
+const projectFilters = () => [{ name: tr("DashCut 项目"), extensions: ["dashcut"] }];
 const { listModels, translateSubtitles, transcribeCloud } = require("./ai-api.cjs");
 
 let desktopServer;
@@ -77,7 +78,7 @@ ipcMain.handle("ai:transcribe", (event, request) => transcribeCloud(request, {
 }));
 ipcMain.handle("export:video", async (event, request) => {
   const result = await dialog.showSaveDialog({
-    title: "导出视频",
+    title: tr("导出视频"),
     defaultPath: "DashCut-export.mp4",
     filters: [{ name: "MP4 Video", extensions: ["mp4"] }],
   });
@@ -94,9 +95,9 @@ ipcMain.handle("export:video", async (event, request) => {
 ipcMain.handle("export:composition", async (event, request) => {
   // Automated end-to-end runs pass the destination instead of driving the native dialog.
   const format = ["mp4", "mov", "m4a", "wav", "gif"].includes(request?.output?.format) ? request.output.format : "mp4";
-  const kinds = { mp4: "MP4 视频", mov: "QuickTime 视频", m4a: "M4A 音频", wav: "WAV 音频", gif: "GIF 动图" };
+  const kinds = { mp4: tr("MP4 视频"), mov: tr("QuickTime 视频"), m4a: tr("M4A 音频"), wav: tr("WAV 音频"), gif: tr("GIF 动图") };
   const result = process.env.DASHCUT_EXPORT_PATH ? { canceled: false, filePath: process.env.DASHCUT_EXPORT_PATH } : await dialog.showSaveDialog({
-    title: "导出",
+    title: tr("导出"),
     defaultPath: `DashCut-export.${format}`,
     filters: [{ name: kinds[format], extensions: [format] }],
   });
@@ -140,9 +141,9 @@ ipcMain.handle("reframe:model", async () => {
   if (!existsSync(target)) {
     // Chromium's network stack honours system proxies, unlike Node's fetch.
     const response = await net.fetch(faceModelUrl);
-    if (!response.ok) throw new Error(`人脸检测模型下载失败（HTTP ${response.status}）`);
+    if (!response.ok) throw new Error(tr("人脸检测模型下载失败（HTTP {status}）", { status: response.status }));
     const bytes = Buffer.from(await response.arrayBuffer());
-    if (bytes.length < 100_000) throw new Error("人脸检测模型下载不完整");
+    if (bytes.length < 100_000) throw new Error(tr("人脸检测模型下载不完整"));
     await mkdir(path.dirname(target), { recursive: true });
     await writeFile(`${target}.tmp`, bytes);
     await rename(`${target}.tmp`, target);
@@ -163,7 +164,7 @@ ipcMain.handle("project:save", async (_event, { document, projectPath, saveAs })
   let target = projectPath;
   if ((!target || saveAs) && process.env.DASHCUT_PROJECT_PATH) target = process.env.DASHCUT_PROJECT_PATH;
   else if (!target || saveAs) {
-    const result = await dialog.showSaveDialog(mainWindow, { title: saveAs ? "项目另存为" : "保存项目", defaultPath: `${document.meta.title || "未命名项目"}.dashcut`, filters: projectFilters });
+    const result = await dialog.showSaveDialog(mainWindow, { title: saveAs ? tr("项目另存为") : tr("保存项目"), defaultPath: `${document.meta.title || tr("未命名项目")}.dashcut`, filters: projectFilters() });
     if (result.canceled || !result.filePath) return { canceled: true };
     target = result.filePath.endsWith(".dashcut") ? result.filePath : `${result.filePath}.dashcut`;
   }
@@ -176,7 +177,7 @@ ipcMain.handle("project:save", async (_event, { document, projectPath, saveAs })
 ipcMain.handle("project:open", async (_event, requested) => {
   let target = requested;
   if (!target) {
-    const result = await dialog.showOpenDialog(mainWindow, { title: "打开项目", filters: projectFilters, properties: ["openFile"] });
+    const result = await dialog.showOpenDialog(mainWindow, { title: tr("打开项目"), filters: projectFilters(), properties: ["openFile"] });
     if (result.canceled || !result.filePaths[0]) return { canceled: true };
     target = result.filePaths[0];
   }
@@ -191,10 +192,14 @@ ipcMain.handle("project:recovery-list", () => autosave().list());
 ipcMain.handle("project:recovery-read", (_event, id) => autosave().read(id));
 ipcMain.handle("project:recovery-discard", (_event, id) => autosave().clear(id));
 ipcMain.handle("project:locate", async (_event, { name, otherNames }) => {
-  const result = await dialog.showOpenDialog(mainWindow, { title: `重新定位「${name}」`, properties: ["openFile"] });
+  const result = await dialog.showOpenDialog(mainWindow, { title: tr("重新定位「{name}」", { name }), properties: ["openFile"] });
   if (result.canceled || !result.filePaths[0]) return { canceled: true };
   const chosen = result.filePaths[0];
   return { path: chosen, siblings: findSiblings(path.dirname(chosen), Array.isArray(otherNames) ? otherNames : []) };
+});
+ipcMain.handle("ui:language", (_event, next) => {
+  setLanguage(next);
+  buildMenu();
 });
 ipcMain.handle("project:state", (_event, state) => { projectState = { dirty: Boolean(state?.dirty), id: String(state?.id ?? "") }; });
 ipcMain.handle("project:close-ready", () => { closeConfirmed = true; mainWindow?.close(); });
@@ -210,28 +215,28 @@ function buildMenu() {
   const isMac = process.platform === "darwin";
   const template = [
     ...(isMac ? [{ role: "appMenu" }] : []),
-    { label: "文件", submenu: [
-      { label: "新建项目", accelerator: "CmdOrCtrl+N", click: () => sendCommand("new") },
-      { label: "打开项目…", accelerator: "CmdOrCtrl+O", click: () => sendCommand("open") },
-      { label: "保存", accelerator: "CmdOrCtrl+S", click: () => sendCommand("save") },
-      { label: "另存为…", accelerator: "Shift+CmdOrCtrl+S", click: () => sendCommand("save-as") },
+    { label: tr("文件"), submenu: [
+      { label: tr("新建项目"), accelerator: "CmdOrCtrl+N", click: () => sendCommand("new") },
+      { label: tr("打开项目…"), accelerator: "CmdOrCtrl+O", click: () => sendCommand("open") },
+      { label: tr("保存"), accelerator: "CmdOrCtrl+S", click: () => sendCommand("save") },
+      { label: tr("另存为…"), accelerator: "Shift+CmdOrCtrl+S", click: () => sendCommand("save-as") },
       { type: "separator" },
-      { label: "导入素材…", accelerator: "CmdOrCtrl+I", click: () => sendCommand("import") },
-      { label: "导出视频…", accelerator: "CmdOrCtrl+E", click: () => sendCommand("export") },
+      { label: tr("导入素材…"), accelerator: "CmdOrCtrl+I", click: () => sendCommand("import") },
+      { label: tr("导出视频…"), accelerator: "CmdOrCtrl+E", click: () => sendCommand("export") },
       { type: "separator" },
-      { label: "极剪助手", accelerator: "CmdOrCtrl+J", click: () => sendCommand("agent") },
+      { label: tr("极剪助手"), accelerator: "CmdOrCtrl+J", click: () => sendCommand("agent") },
       ...(isMac ? [] : [{ type: "separator" }, { role: "quit" }]),
     ] },
     // Undo/redo route through the renderer so text fields and the timeline each get their own history.
-    { label: "编辑", submenu: [
-      { label: "撤销", accelerator: "CmdOrCtrl+Z", click: () => sendCommand("undo") },
-      { label: "重做", accelerator: "Shift+CmdOrCtrl+Z", click: () => sendCommand("redo") },
+    { label: tr("编辑"), submenu: [
+      { label: tr("撤销"), accelerator: "CmdOrCtrl+Z", click: () => sendCommand("undo") },
+      { label: tr("重做"), accelerator: "Shift+CmdOrCtrl+Z", click: () => sendCommand("redo") },
       { type: "separator" },
       // Clipboard items also route through the renderer: text fields keep native behaviour, clips get clip copy/paste.
-      { label: "剪切", accelerator: "CmdOrCtrl+X", click: () => sendCommand("cut") },
-      { label: "复制", accelerator: "CmdOrCtrl+C", click: () => sendCommand("copy") },
-      { label: "粘贴", accelerator: "CmdOrCtrl+V", click: () => sendCommand("paste") },
-      { label: "复制并粘贴", accelerator: "CmdOrCtrl+D", click: () => sendCommand("duplicate") },
+      { label: tr("剪切"), accelerator: "CmdOrCtrl+X", click: () => sendCommand("cut") },
+      { label: tr("复制"), accelerator: "CmdOrCtrl+C", click: () => sendCommand("copy") },
+      { label: tr("粘贴"), accelerator: "CmdOrCtrl+V", click: () => sendCommand("paste") },
+      { label: tr("复制并粘贴"), accelerator: "CmdOrCtrl+D", click: () => sendCommand("duplicate") },
       { role: "selectAll" },
     ] },
     { role: "viewMenu" },
@@ -264,7 +269,7 @@ async function createWindow() {
   window.on("close", (event) => {
     if (closeConfirmed || !projectState.dirty) return;
     event.preventDefault();
-    const choice = dialog.showMessageBoxSync(window, { type: "warning", buttons: ["保存", "不保存", "取消"], defaultId: 0, cancelId: 2, message: "项目有未保存的修改", detail: "关闭前要保存当前项目吗？" });
+    const choice = dialog.showMessageBoxSync(window, { type: "warning", buttons: [tr("保存"), tr("不保存"), tr("取消")], defaultId: 0, cancelId: 2, message: tr("项目有未保存的修改"), detail: tr("关闭前要保存当前项目吗？") });
     if (choice === 0) sendCommand("save-and-close");
     if (choice === 1) {
       closeConfirmed = true;

@@ -528,3 +528,6 @@ button { cursor: pointer; }
 .loudness-meter.quiet i { background: #6b5a2a; }
 .loudness-meter em { position: absolute; top: 0; bottom: 0; width: 2px; background: #ffcc45; }
 .loudness-meter span { position: relative; display: block; text-align: center; font: 9px/16px monospace; color: #dfe3ea; }
+.language-toggle { display: flex; gap: 0; border: 1px solid #2c323e; border-radius: 7px; background: #12151c; padding: 2px; margin-right: 4px; }
+.language-toggle b { padding: 3px 7px; border-radius: 5px; font-size: 10px; color: #6d7584; }
+.language-toggle b.on { background: #272d39; color: white; }

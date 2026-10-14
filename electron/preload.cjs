@@ -26,6 +26,7 @@ contextBridge.exposeInMainWorld("dashCutDesktop", {
   faceModel: () => ipcRenderer.invoke("reframe:model"),
   analyzeComposition: (request) => ipcRenderer.invoke("export:analyze", request),
   mediaExists: (paths) => ipcRenderer.invoke("media:exists", paths),
+  setUiLanguage: (language) => ipcRenderer.invoke("ui:language", language),
   saveProject: (request) => ipcRenderer.invoke("project:save", request),
   openProject: (projectPath) => ipcRenderer.invoke("project:open", projectPath),
   recentProjects: () => ipcRenderer.invoke("project:recent"),
