@@ -77,7 +77,28 @@ declare global {
     speed: number;
     audio: ClipAudioSettings;
   }
+  /**
+   * mp4/mov: video (+ burned captions and SRT sidecars). m4a/wav: the audio mix only. gif: silent,
+   * palette-optimised, at gif.fps and gif.width (height follows the canvas), at most gif.maxDuration seconds.
+   * loudnessTarget (LUFS, e.g. -14) runs a measuring pass, then a linear loudnorm pass on the mix (true peak -1.5 dBTP).
+   */
+  interface CompositionOutput {
+    format: "mp4" | "mov" | "m4a" | "wav" | "gif";
+    codec: "h264" | "hevc";
+    loudnessTarget: number | null;
+    gif?: { fps: number; width: number; maxDuration: number };
+  }
+  /** Result of analysing the rendered mix and picture without writing a file. Times are timeline seconds. */
+  interface CompositionAnalysis {
+    duration: number;
+    integratedLufs: number | null;
+    loudnessRange: number | null;
+    truePeak: number | null;
+    blackFrames: Array<{ start: number; end: number }>;
+    silences: Array<{ start: number; end: number }>;
+  }
   interface CompositionRequest {
+    output?: CompositionOutput;
     width: number;
     height: number;
     fps: 30 | 60;
