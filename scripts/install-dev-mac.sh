@@ -28,11 +28,19 @@ version="${base#v}-dev.$(date +%Y%m%d%H%M)"
 
 npm run media:verify
 npm run build
-CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --mac dmg --arm64 --publish never \
-  -c.mac.notarize=false -c.extraMetadata.version="$version"
+export CSC_IDENTITY_AUTO_DISCOVERY=false
+npx electron-builder --mac dir --arm64 --publish never -c.mac.notarize=false -c.extraMetadata.version="$version"
 
 osascript -e 'tell application "DashCut" to quit' 2>/dev/null || true
 while pgrep -xq DashCut; do sleep 0.5; done
 rm -rf "$app"
 ditto release/mac-arm64/DashCut.app "$app"
-echo "Installed DashCut $version to $app (installer: release/DashCut-$version-mac-arm64.dmg)"
+echo "Installed DashCut $version to $app"
+
+# The installer is a convenience; a flaky disk-image unmount must not undo the install above.
+if [[ "${DASHCUT_SKIP_DMG:-}" != "1" ]]; then
+  npx electron-builder --mac dmg --arm64 --publish never --prepackaged release/mac-arm64/DashCut.app \
+    -c.mac.notarize=false -c.extraMetadata.version="$version" \
+    && echo "Installer: release/DashCut-$version-mac-arm64.dmg" \
+    || echo "warning: DMG build failed; the app is installed, rerun later for an installer" >&2
+fi
