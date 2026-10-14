@@ -31,7 +31,7 @@ test("server-renders the DashCut editor", async () => {
   assert.match(html, /自动字幕/);
   assert.match(html, /导出视频/);
   assert.match(html, /分割/);
-  assert.match(html, /城市漫游/);
+  assert.match(html, /未命名项目/);
   // Left media library, centre preview, right inspector tabs and the timeline toolbar.
   for (const label of ["导入素材", "画面", "音频", "变速", "动画", "调整", "AI 效果", "主轨", "封面", "智能剪口播", "智能镜头分割", "主轨磁吸", "预览轴", "录音"]) assert.match(html, new RegExp(label));
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape/);

@@ -3,7 +3,8 @@
 import { ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "./editor/icons";
 import { Inspector, InspectorTab } from "./editor/Inspector";
-import { buildFilmstrip, captureFrame, probeFile } from "./editor/media";
+import { buildFilmstrip, buildThumbnail, captureFrame, probeFile } from "./editor/media";
+import { buildDocument, EditorState, migrateDocument, ProjectDocument, readDocument } from "./editor/project-file";
 import {
   addTrack, Asset, Clip, clipAt, clipDuration, clipEnd, createClip, defaultClipSettings, deleteClips, EditOptions, freezeFrame, hasRoom,
   mainTrack, placeClip, Project, projectDuration, pruneTracks, replaceWithRanges, sourceRangeToTimeline, sourceTimeAt, splitAtSourceTimes, splitClip,
@@ -33,8 +34,23 @@ function isTyping(target: EventTarget | null) {
   return Boolean(element?.closest("input, textarea, select, [contenteditable=true]"));
 }
 
+type Recovery = { id: string; title: string; savedAt: string; projectPath: string };
+type RecentProject = { path: string; title: string; openedAt: string; exists: boolean };
+const autosaveInterval = 30_000;
+
+function newProjectMeta() {
+  return { id: uid("project"), title: "未命名项目", createdAt: new Date().toISOString() };
+}
+
 export default function Home() {
   const [assets, setAssets] = useState<Asset[]>([]);
+  const [projectMeta, setProjectMeta] = useState(newProjectMeta);
+  const [projectPath, setProjectPath] = useState("");
+  const [savedFingerprint, setSavedFingerprint] = useState<string | null>(null);
+  const [recoveries, setRecoveries] = useState<Recovery[]>([]);
+  const [recentProjects, setRecentProjects] = useState<RecentProject[]>([]);
+  const [projectMenuOpen, setProjectMenuOpen] = useState(false);
+  const [missingAssets, setMissingAssets] = useState<string[]>([]);
   const [history, setHistory] = useState<History>(() => ({ past: [], present: createProject(), future: [], key: "", at: 0 }));
   const project = history.present;
   const [selection, setSelection] = useState<string[]>([]);
@@ -476,6 +492,8 @@ export default function Home() {
         : { " ": "play", backspace: "delete", delete: "delete", m: "marker", q: "trim-left", w: "trim-right", a: "select", b: "blade" };
       const action = map[key];
       if (!action) return;
+      // On desktop the application menu owns undo/redo so they are not applied twice.
+      if (meta && window.dashCutDesktop && (action === "undo" || action === "redo")) return;
       event.preventDefault();
       if (action === "play") return document.querySelector<HTMLButtonElement>("[data-play-toggle]")?.click();
       if (action === "select" || action === "blade") return setMode(action);
@@ -778,6 +796,195 @@ export default function Home() {
     commit((state) => updateClip(state, primaryId, patch, options), `${primaryId}-${key}`);
   }, [commit, options, primaryId]);
 
+  /* ------------------------------------------------------------ project files */
+
+  function editorState(): EditorState {
+    return {
+      id: projectMeta.id,
+      title: projectMeta.title.trim() || "未命名项目",
+      createdAt: projectMeta.createdAt,
+      ratio,
+      project,
+      assets,
+      captionStyle: subtitleStyle,
+      captionMode: subtitleMode,
+      exportSettings: { resolution: exportResolution, fps: exportFps, platform },
+      cover: { title: coverTitle, accent: coverAccent },
+    };
+  }
+
+  // Everything that is written to disk except the save timestamp; changes mark the project dirty.
+  const fingerprint = useMemo(() => {
+    const doc = buildDocument({ id: projectMeta.id, title: projectMeta.title, createdAt: projectMeta.createdAt, ratio, project, assets, captionStyle: subtitleStyle, captionMode: subtitleMode, exportSettings: { resolution: exportResolution, fps: exportFps, platform }, cover: { title: coverTitle, accent: coverAccent } }, new Date(0));
+    return JSON.stringify(doc);
+  }, [assets, coverAccent, coverTitle, exportFps, exportResolution, platform, project, projectMeta, ratio, subtitleMode, subtitleStyle]);
+  const dirty = savedFingerprint === null ? project.clips.length > 0 || assets.length > 0 : fingerprint !== savedFingerprint;
+
+  useEffect(() => {
+    void window.dashCutDesktop?.setProjectState({ dirty, id: projectMeta.id });
+  }, [dirty, projectMeta.id]);
+
+  async function autosaveNow() {
+    if (!window.dashCutDesktop || !dirty) return;
+    await window.dashCutDesktop.autosaveProject({ document: buildDocument(editorState()), projectPath }).catch(() => undefined);
+  }
+
+  const autosaveRef = useRef(autosaveNow);
+  useEffect(() => { autosaveRef.current = autosaveNow; });
+  useEffect(() => {
+    const id = window.setInterval(() => void autosaveRef.current(), autosaveInterval);
+    return () => window.clearInterval(id);
+  }, []);
+
+  async function saveProject(saveAs: boolean) {
+    if (!window.dashCutDesktop) return setToast("保存项目仅支持桌面版");
+    if (recording !== "idle") return setToast("请先停止录音");
+    const unsaved = assets.filter((asset) => !asset.sourcePath && usedAssets.has(asset.id));
+    if (unsaved.length) setToast(`${unsaved.length} 个素材没有本地路径，将不会被保存`);
+    const state = editorState();
+    try {
+      const result = await window.dashCutDesktop.saveProject({ document: buildDocument(state), projectPath, saveAs });
+      if (result.canceled || !result.projectPath) return false;
+      setProjectPath(result.projectPath);
+      setSavedFingerprint(fingerprint);
+      setToast(`项目已保存 · ${result.projectPath.split("/").pop()}`);
+      return true;
+    } catch (error) {
+      setToast(error instanceof Error ? `保存失败：${error.message}` : "保存失败");
+      return false;
+    }
+  }
+
+  async function refreshRecent() {
+    if (window.dashCutDesktop) setRecentProjects(await window.dashCutDesktop.recentProjects());
+  }
+
+  function confirmDiscard() {
+    return !dirty || window.confirm("当前项目有未保存的修改，继续将丢弃这些修改。确定继续吗？");
+  }
+
+  /** Swaps in a whole project: previews are rebuilt in the background and missing media prompts a relink. */
+  async function loadEditorState(state: EditorState, path: string, missing: string[], markSaved: boolean) {
+    setPlaying(false);
+    for (const asset of assets) if (asset.url.startsWith("blob:")) URL.revokeObjectURL(asset.url);
+    setAssets(state.assets);
+    setHistory({ past: [], present: state.project, future: [], key: "", at: 0 });
+    setProjectMeta({ id: state.id, title: state.title, createdAt: state.createdAt });
+    setProjectPath(path);
+    setRatio(state.ratio);
+    // Older or newer files may carry fewer or extra style fields; keep defaults for anything missing.
+    setSubtitleStyle({ ...defaultSubtitleStyle, ...state.captionStyle });
+    setSubtitleMode(state.captionMode);
+    setExportResolution(state.exportSettings.resolution);
+    setExportFps(state.exportSettings.fps);
+    setPlatform(state.exportSettings.platform);
+    setCoverTitle(state.cover.title || coverTitle);
+    setCoverAccent(state.cover.accent || coverAccent);
+    setSelection([]);
+    seek(0);
+    setMissingAssets(missing);
+    setSavedFingerprint(markSaved ? JSON.stringify(buildDocument(state, new Date(0))) : "");
+    for (const asset of state.assets) if (!missing.includes(asset.id)) void refreshPreviews(asset);
+  }
+
+  async function refreshPreviews(asset: Asset) {
+    const thumbnail = await buildThumbnail(asset).catch(() => "");
+    patchAsset(asset.id, { thumbnail });
+    if (asset.kind === "video") void buildFilmstrip(asset).then((frames) => patchAsset(asset.id, { frames }));
+    if ((asset.kind === "video" || asset.kind === "audio") && window.dashCutDesktop) void window.dashCutDesktop.extractWaveform(asset.sourcePath).then((wave) => patchAsset(asset.id, { peaks: wave.peaks, peaksPerSecond: wave.peaksPerSecond, hasAudio: wave.peaks.length > 0 })).catch(() => undefined);
+  }
+
+  async function documentToState(raw: unknown) {
+    const doc: ProjectDocument = migrateDocument(raw);
+    const paths = doc.assets.map((asset) => asset.absolutePath).filter(Boolean);
+    const urls = await window.dashCutDesktop!.registerMedia(paths);
+    const lookup = new Map(paths.map((item, index) => [item, urls[index]]));
+    return readDocument(doc, (absolutePath) => lookup.get(absolutePath) ?? "");
+  }
+
+  async function openProject(target?: string) {
+    if (!window.dashCutDesktop) return setToast("打开项目仅支持桌面版");
+    if (!confirmDiscard()) return;
+    try {
+      const result = await window.dashCutDesktop.openProject(target);
+      if (result.canceled || !result.document) return;
+      const state = await documentToState(result.document);
+      await loadEditorState(state, result.projectPath ?? "", result.missing ?? [], true);
+      setToast(result.missing?.length ? `项目已打开，${result.missing.length} 个素材需要重新定位` : `已打开「${state.title}」`);
+    } catch (error) {
+      setToast(error instanceof Error ? `无法打开项目：${error.message}` : "无法打开项目");
+    }
+  }
+
+  async function newProject() {
+    if (!confirmDiscard()) return;
+    if (window.dashCutDesktop) await window.dashCutDesktop.discardRecovery(projectMeta.id);
+    const meta = newProjectMeta();
+    await loadEditorState({ ...editorState(), ...meta, ratio: "16:9", project: createProject(), assets: [], captionStyle: defaultSubtitleStyle, captionMode: "both" }, "", [], false);
+    setSavedFingerprint(null);
+  }
+
+  async function restoreRecovery(item: Recovery) {
+    if (!window.dashCutDesktop) return;
+    try {
+      const payload = await window.dashCutDesktop.readRecovery(item.id);
+      const state = await documentToState(payload.document);
+      await loadEditorState(state, payload.projectPath, payload.missing, false);
+      setRecoveries([]);
+      setToast(`已恢复「${state.title}」，请保存项目`);
+    } catch (error) {
+      setToast(error instanceof Error ? `恢复失败：${error.message}` : "恢复失败");
+    }
+  }
+
+  async function discardRecoveries() {
+    for (const item of recoveries) await window.dashCutDesktop?.discardRecovery(item.id);
+    setRecoveries([]);
+  }
+
+  async function relinkAsset(assetId: string) {
+    const asset = assetMap.get(assetId);
+    if (!asset || !window.dashCutDesktop) return;
+    const others = missingAssets.filter((id) => id !== assetId).map((id) => assetMap.get(id)!).filter(Boolean);
+    const result = await window.dashCutDesktop.locateMedia({ name: asset.name, otherNames: others.map((item) => item.name) });
+    if (result.canceled || !result.path) return;
+    // Files found next to the chosen one under the same names are relinked in the same step.
+    const updates = [{ asset, path: result.path }, ...others.filter((item) => result.siblings?.[item.name]).map((item) => ({ asset: item, path: result.siblings![item.name] }))];
+    const urls = await window.dashCutDesktop.registerMedia(updates.map((item) => item.path));
+    updates.forEach((item, index) => {
+      const next = { ...item.asset, sourcePath: item.path, url: urls[index] };
+      patchAsset(item.asset.id, { sourcePath: next.sourcePath, url: next.url });
+      void refreshPreviews(next);
+    });
+    setMissingAssets((ids) => ids.filter((id) => !updates.some((item) => item.asset.id === id)));
+    setToast(`已重新定位 ${updates.length} 个素材`);
+  }
+
+  useEffect(() => {
+    if (!window.dashCutDesktop) return;
+    void window.dashCutDesktop.recoveryList().then(setRecoveries).catch(() => undefined);
+  }, []);
+
+  const commandRef = useRef<(command: string) => void>(() => undefined);
+  useEffect(() => {
+    commandRef.current = (command: string) => {
+      const typing = isTyping(document.activeElement);
+      if (command === "undo" || command === "redo") {
+        if (typing) return void document.execCommand(command);
+        return command === "undo" ? undo() : redo();
+      }
+      if (command === "new") return void newProject();
+      if (command === "open") return void openProject();
+      if (command === "save") return void saveProject(false);
+      if (command === "save-as") return void saveProject(true);
+      if (command === "import") return fileInputRef.current?.click();
+      if (command === "export") return setExportOpen(true);
+      if (command === "autosave") return void autosaveNow();
+      if (command === "save-and-close") void saveProject(false).then((saved) => { if (saved) void window.dashCutDesktop?.closeReady(); });
+    };
+  });
+  useEffect(() => window.dashCutDesktop?.onMenuCommand((command) => commandRef.current(command)), []);
+
   /* ------------------------------------------------------------ render */
 
   const mediaPanel = <>
@@ -840,7 +1047,19 @@ export default function Home() {
     <input ref={fileInputRef} className="hidden-input" type="file" accept="video/*,image/*,audio/*" multiple onChange={importFiles} />
     <header className="topbar">
       <div className="brand"><span className="brand-mark"><i></i><i></i></span><strong>DashCut <em>极剪</em></strong></div>
-      <div className="project-title"><div><strong>城市漫游</strong><span>{formatClock(duration, false)} · {project.clips.length} 个片段</span></div></div>
+      <div className="project-title">
+        <div className="project-menu">
+          <button className="project-menu-button" title="项目菜单" onClick={() => { setProjectMenuOpen(!projectMenuOpen); if (!projectMenuOpen) void refreshRecent(); }}><Icon name="film" size={14} /></button>
+          {projectMenuOpen && <div className="project-popover" onMouseLeave={() => setProjectMenuOpen(false)}>
+            <button onClick={() => { setProjectMenuOpen(false); void newProject(); }}>新建项目<kbd>⌘N</kbd></button>
+            <button onClick={() => { setProjectMenuOpen(false); void openProject(); }}>打开项目…<kbd>⌘O</kbd></button>
+            <button onClick={() => { setProjectMenuOpen(false); void saveProject(false); }}>保存<kbd>⌘S</kbd></button>
+            <button onClick={() => { setProjectMenuOpen(false); void saveProject(true); }}>另存为…<kbd>⇧⌘S</kbd></button>
+            {recentProjects.length > 0 && <><b>最近项目</b>{recentProjects.map((item) => <button key={item.path} className={item.exists ? "" : "missing"} title={item.path} onClick={() => { setProjectMenuOpen(false); if (item.exists) void openProject(item.path); else void window.dashCutDesktop?.removeRecentProject(item.path).then(refreshRecent); }}>{item.title}<small>{item.exists ? item.path.split("/").slice(-2, -1)[0] : "文件已移动，点击移除"}</small></button>)}</>}
+          </div>}
+        </div>
+        <div><input className="project-name" aria-label="项目名称" value={projectMeta.title} onChange={(event) => setProjectMeta((meta) => ({ ...meta, title: event.target.value }))} onBlur={(event) => { if (!event.target.value.trim()) setProjectMeta((meta) => ({ ...meta, title: "未命名项目" })); }} /><span>{dirty ? "未保存" : projectPath ? "已保存" : "未保存到磁盘"} · {formatClock(duration, false)} · {project.clips.length} 个片段</span></div>
+      </div>
       <div className="top-actions"><button className="ghost hide-mobile" onClick={() => setAboutOpen(true)}>关于与许可</button><button className="export-button" onClick={() => setExportOpen(true)}>导出视频 <span>↗</span></button></div>
     </header>
 
@@ -912,6 +1131,22 @@ export default function Home() {
     {aboutOpen && <div className="modal-backdrop" onMouseDown={() => setAboutOpen(false)}><section className="about-modal" onMouseDown={(event) => event.stopPropagation()}>
       <header><div><span className="eyebrow">ABOUT & LICENSES</span><h2>DashCut 极剪</h2></div><button onClick={() => setAboutOpen(false)}>×</button></header>
       <div className="about-content"><p>面向哔哩哔哩与 YouTube 创作者的视频编辑器。</p><div><strong>视频运行时</strong><span>FFmpeg 9.0.1 · LGPLv2.1-or-later</span><small>macOS 使用 VideoToolbox，Windows 使用 MediaFoundation。安装包包含许可证、源码地址和实际构建参数。</small></div><div><strong>应用许可证</strong><span>DashCut · MIT License</span></div><a href="https://github.com/Mikasathebest/DashCut/blob/main/THIRD_PARTY_NOTICES.md" target="_blank" rel="noreferrer">查看第三方声明与对应源码 ↗</a></div>
+    </section></div>}
+
+    {recoveries.length > 0 && <div className="modal-backdrop"><section className="about-modal recovery-modal">
+      <header><div><span className="eyebrow">RECOVERY</span><h2>发现未保存的项目</h2></div></header>
+      <div className="about-content"><p>DashCut 上次没有正常关闭，以下项目有自动保存的修改：</p>
+        {recoveries.map((item) => <div key={item.id} className="recovery-row"><div><strong>{item.title}</strong><small>{new Date(item.savedAt).toLocaleString("zh-CN")}{item.projectPath ? ` · ${item.projectPath}` : " · 尚未保存到磁盘"}</small></div><button className="primary" onClick={() => void restoreRecovery(item)}>恢复</button></div>)}
+        <button className="ghost-action" onClick={() => void discardRecoveries()}>全部丢弃</button>
+      </div>
+    </section></div>}
+
+    {missingAssets.length > 0 && <div className="modal-backdrop"><section className="about-modal recovery-modal">
+      <header><div><span className="eyebrow">RELINK MEDIA</span><h2>找不到 {missingAssets.length} 个素材</h2></div><button onClick={() => setMissingAssets([])}>×</button></header>
+      <div className="about-content"><p>素材可能被移动或重命名。定位其中一个文件后，同一文件夹里同名的其他素材会自动重新链接。</p>
+        {missingAssets.map((id) => assetMap.get(id)).filter(Boolean).map((asset) => <div key={asset!.id} className="recovery-row"><div><strong>{asset!.name}</strong><small>{asset!.sourcePath || "无路径"}</small></div><button className="primary" onClick={() => void relinkAsset(asset!.id)}>定位…</button></div>)}
+        <button className="ghost-action" onClick={() => setMissingAssets([])}>稍后处理</button>
+      </div>
     </section></div>}
 
     {toast && <div className="toast"><span>✓</span>{toast}</div>}

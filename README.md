@@ -54,12 +54,19 @@ Windows x64 releases produce an unsigned one-click `.exe` without credentials; W
 
 ![DashCut editor with global subtitle style controls](docs/images/dashcut-subtitle-style.png)
 
-### Import and edit multiple clips
+### Import and edit on a multi-track timeline
 
-1. Open **Media** and select multiple video files in one import.
-2. Select a clip on the timeline, move the playhead, and click **Split**.
-3. Open **Audio** to add a music file and set its volume.
-4. Open **Cover** to edit the title/accent color and save a 1280 × 720 PNG thumbnail.
+1. Click **Import media** (⌘I) and pick any mix of videos, images, GIFs and audio. They appear in the library in import order with a first-frame thumbnail and duration; nothing is placed on the timeline automatically.
+2. Drag media from the library onto a track. Drop it on the empty strip above the tracks to create a new picture-in-picture track, so images and videos can be stacked.
+3. Use the toolbar above the timeline: import, select/blade mode, undo/redo/reset, split, trim left/right, delete, marker, freeze, reverse, mirror, rotate, crop, smart talk cut, smart scene split and a voice-over recorder with a 3-second countdown. Toggles on the right control main-track magnet, snapping, linkage and the hover preview axis; −/+ zooms the timeline and **…** sets track height and waveform size.
+4. Select a clip to edit it in the right-hand panel: picture (scale, position, rotation, opacity, mirror, crop), audio (volume, fades, effects), speed, in/out animations, colour adjustment and AI effects. Preview and export use the same settings.
+5. Click the cover tile at the left of the main track to design a 1280 × 720 thumbnail.
+
+### Save, reopen and recover projects
+
+- **File → Save** (⌘S) writes a `.dashcut` project file. Media is referenced, not copied: paths are stored relative to the project file, so moving the project folder together with its media keeps working.
+- **File → Open** (⌘O) or the project menu next to the title reopens projects; the menu also lists recent projects. If media was moved, DashCut asks you to locate it, and other missing files with the same names in that folder are relinked automatically.
+- Unsaved work is autosaved every 30 seconds and whenever the window loses focus. After a crash, DashCut offers to restore it on the next launch. Closing a project with unsaved changes asks whether to save first.
 
 ### Extract Chinese or English captions locally
 

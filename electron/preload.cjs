@@ -21,6 +21,23 @@ contextBridge.exposeInMainWorld("dashCutDesktop", {
   detectSpeechSegments: (source, range) => ipcRenderer.invoke("smart:speech", source, range),
   saveRecording: (bytes) => ipcRenderer.invoke("recording:save", bytes),
   requestMicrophone: () => ipcRenderer.invoke("media:microphone"),
+  registerMedia: (paths) => ipcRenderer.invoke("media:register", paths),
+  saveProject: (request) => ipcRenderer.invoke("project:save", request),
+  openProject: (projectPath) => ipcRenderer.invoke("project:open", projectPath),
+  recentProjects: () => ipcRenderer.invoke("project:recent"),
+  removeRecentProject: (projectPath) => ipcRenderer.invoke("project:recent-remove", projectPath),
+  autosaveProject: (request) => ipcRenderer.invoke("project:autosave", request),
+  recoveryList: () => ipcRenderer.invoke("project:recovery-list"),
+  readRecovery: (id) => ipcRenderer.invoke("project:recovery-read", id),
+  discardRecovery: (id) => ipcRenderer.invoke("project:recovery-discard", id),
+  locateMedia: (request) => ipcRenderer.invoke("project:locate", request),
+  setProjectState: (state) => ipcRenderer.invoke("project:state", state),
+  closeReady: () => ipcRenderer.invoke("project:close-ready"),
+  onMenuCommand: (callback) => {
+    const listener = (_event, command) => callback(command);
+    ipcRenderer.on("menu:command", listener);
+    return () => ipcRenderer.removeListener("menu:command", listener);
+  },
   onExportProgress: (callback) => {
     const listener = (_event, progress) => callback(progress);
     ipcRenderer.on("export:progress", listener);

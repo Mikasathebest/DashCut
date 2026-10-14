@@ -20,6 +20,8 @@ function waitFor(element: HTMLMediaElement, event: string) {
 function loadImage(url: string) {
   return new Promise<HTMLImageElement | null>((resolve) => {
     const image = new Image();
+    // Project media is served from a custom scheme; anonymous CORS keeps canvases readable.
+    image.crossOrigin = "anonymous";
     image.onload = () => resolve(image.naturalWidth > 0 ? image : null);
     image.onerror = () => resolve(null);
     image.src = url;
@@ -74,10 +76,14 @@ async function seek(video: HTMLVideoElement, time: number) {
 /** Probes one imported file. Returns null when the browser cannot decode it. */
 export async function probeFile(file: File, sourcePath: string): Promise<Asset | null> {
   const url = URL.createObjectURL(file);
+  const fail = () => {
+    URL.revokeObjectURL(url);
+    return null;
+  };
   const base = { id: uid("asset"), name: file.name, url, sourcePath, frames: [] as string[], peaks: [] as number[], peaksPerSecond: 0 };
   if (file.type.startsWith("image/")) {
     const image = await loadImage(url);
-    if (!image) return URL.revokeObjectURL(url), null;
+    if (!image) return fail();
     let kind: MediaKind = "image";
     let duration = defaultStillDuration;
     if (file.type === "image/gif") {
@@ -94,14 +100,14 @@ export async function probeFile(file: File, sourcePath: string): Promise<Asset |
     const audio = document.createElement("audio");
     audio.preload = "metadata";
     audio.src = url;
-    if (!(await waitFor(audio, "loadedmetadata")) || !Number.isFinite(audio.duration) || audio.duration <= 0) return URL.revokeObjectURL(url), null;
+    if (!(await waitFor(audio, "loadedmetadata")) || !Number.isFinite(audio.duration) || audio.duration <= 0) return fail();
     return { ...base, kind: "audio", duration: audio.duration, width: 0, height: 0, hasAudio: true, thumbnail: "" };
   }
   const video = document.createElement("video");
   video.preload = "auto";
   video.muted = true;
   video.src = url;
-  if (!(await waitFor(video, "loadeddata")) || !Number.isFinite(video.duration) || video.duration <= 0 || !video.videoWidth) return URL.revokeObjectURL(url), null;
+  if (!(await waitFor(video, "loadeddata")) || !Number.isFinite(video.duration) || video.duration <= 0 || !video.videoWidth) return fail();
   await seek(video, Math.min(0.05, video.duration / 2));
   const thumbnail = drawFrame(video, video.videoWidth, video.videoHeight, 240);
   return { ...base, kind: "video", duration: video.duration, width: video.videoWidth, height: video.videoHeight, hasAudio: true, thumbnail };
@@ -113,6 +119,7 @@ export async function buildFilmstrip(asset: Asset) {
   const video = document.createElement("video");
   video.preload = "auto";
   video.muted = true;
+  video.crossOrigin = "anonymous";
   video.src = asset.url;
   if (!(await waitFor(video, "loadeddata"))) return [];
   const frames: string[] = [];
@@ -132,6 +139,7 @@ export async function captureFrame(asset: Asset, time: number, maxWidth = 1280) 
   const video = document.createElement("video");
   video.preload = "auto";
   video.muted = true;
+  video.crossOrigin = "anonymous";
   video.src = asset.url;
   if (!(await waitFor(video, "loadeddata"))) return "";
   await seek(video, Math.max(0, Math.min(asset.duration - 0.05, time)));
@@ -139,4 +147,12 @@ export async function captureFrame(asset: Asset, time: number, maxWidth = 1280) 
   video.removeAttribute("src");
   video.load();
   return frame;
+}
+
+/** Rebuilds the library thumbnail for media reopened from a project file. */
+export async function buildThumbnail(asset: Asset) {
+  if (asset.kind === "audio" || !asset.url) return "";
+  if (asset.kind === "video") return captureFrame(asset, Math.min(0.05, asset.duration / 2), 240);
+  const image = await loadImage(asset.url);
+  return image ? drawFrame(image, image.naturalWidth, image.naturalHeight, 240) : "";
 }

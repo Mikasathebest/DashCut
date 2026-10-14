@@ -131,6 +131,19 @@ declare global {
       detectSpeechSegments(source: string, range: { in: number; out: number }): Promise<{ speech: Array<{ start: number; end: number }>; silences: Array<{ start: number; end: number }> }>;
       saveRecording(bytes: ArrayBuffer): Promise<string>;
       requestMicrophone(): Promise<boolean>;
+      registerMedia(paths: string[]): Promise<string[]>;
+      saveProject(request: { document: unknown; projectPath: string; saveAs: boolean }): Promise<{ canceled?: boolean; projectPath?: string }>;
+      openProject(projectPath?: string): Promise<{ canceled?: boolean; projectPath?: string; document?: unknown; missing?: string[] }>;
+      recentProjects(): Promise<Array<{ path: string; title: string; openedAt: string; exists: boolean }>>;
+      removeRecentProject(projectPath: string): Promise<unknown>;
+      autosaveProject(request: { document: unknown; projectPath: string }): Promise<void>;
+      recoveryList(): Promise<Array<{ id: string; title: string; savedAt: string; projectPath: string }>>;
+      readRecovery(id: string): Promise<{ document: unknown; projectPath: string; missing: string[] }>;
+      discardRecovery(id: string): Promise<void>;
+      locateMedia(request: { name: string; otherNames: string[] }): Promise<{ canceled?: boolean; path?: string; siblings?: Record<string, string> }>;
+      setProjectState(state: { dirty: boolean; id: string }): Promise<void>;
+      closeReady(): Promise<void>;
+      onMenuCommand(callback: (command: string) => void): () => void;
       onExportProgress(callback: (progress: { progress: number; stage: string }) => void): () => void;
       transcribeLocal(request: {
         clips: Array<{ id: number; path: string }>;
