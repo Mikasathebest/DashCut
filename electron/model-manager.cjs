@@ -9,8 +9,8 @@ const execFileAsync = promisify(execFile);
 const MODEL_CATALOG = {
   small: { label: "Small", approximateGb: 0.5, quality: "快速", description: "适合 CPU 和短视频" },
   medium: { label: "Medium", approximateGb: 1.5, quality: "较高", description: "适合高性能 CPU 或入门 GPU" },
-  turbo: { label: "Turbo", approximateGb: 1.6, quality: "较高", description: "适合 CUDA GPU 的高速识别" },
-  "large-v3": { label: "Large v3", approximateGb: 3.1, quality: "最高", description: "适合 8 GB+ CUDA GPU" },
+  turbo: { label: "Turbo", approximateGb: 1.6, quality: "较高", description: "接近 Large 的准确度，CPU / Apple Silicon 上速度快数倍" },
+  "large-v3": { label: "Large v3", approximateGb: 3.1, quality: "最高", description: "最高准确度，适合 8 GB+ 显存的 CUDA GPU" },
 };
 
 function validModel(model) {
@@ -54,16 +54,34 @@ async function resolveRuntime(options) {
   return { kind: options.isPackaged ? "missing" : "development", executable: "", prefixArgs: [], ready: false };
 }
 
+function withoutProgress(text) {
+  return String(text || "").split("\n").filter((line) => !line.startsWith("PROGRESS ")).join("\n").trim();
+}
+
 async function runEngine(args, options, execution = {}) {
   const runtime = await resolveRuntime(options);
   if (!runtime.ready) throw new Error(options.isPackaged ? "安装包缺少本地 AI 运行时，请重新安装 DashCut 极剪" : "开发环境尚未安装 faster-whisper");
-  const { stdout, stderr } = await execFileAsync(runtime.executable, [...runtime.prefixArgs, ...args], {
+  const running = execFileAsync(runtime.executable, [...runtime.prefixArgs, ...args], {
     timeout: execution.timeout ?? 6 * 60 * 60 * 1000,
     windowsHide: true,
     maxBuffer: 100 * 1024 * 1024,
   });
+  // The engine streams "PROGRESS <0..1>" lines on stderr while it works.
+  let pending = "";
+  running.child.stderr?.on("data", (chunk) => {
+    const lines = (pending + chunk).split("\n");
+    pending = lines.pop();
+    for (const line of lines) {
+      const match = /^PROGRESS ([\d.]+)$/.exec(line.trim());
+      if (match) execution.onProgress?.(Number(match[1]));
+    }
+  });
+  let stdout;
+  let stderr;
+  try { ({ stdout, stderr } = await running); }
+  catch (error) { throw new Error(withoutProgress(error.stderr) || error.message); }
   try { return JSON.parse(stdout); }
-  catch { throw new Error(stderr || "本地 AI 运行时返回了无效结果"); }
+  catch { throw new Error(withoutProgress(stderr) || "本地 AI 运行时返回了无效结果"); }
 }
 
 async function getRuntimeStatus(options) {

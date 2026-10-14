@@ -54,9 +54,11 @@ function srtTime(seconds) {
   return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")},${String(millis).padStart(3, "0")}`;
 }
 
-function assColor(hex) {
+// ASS colors are &HAABBGGRR; alpha 00 is opaque. `opacity` is 0-100.
+function assColor(hex, opacity = 100) {
   const value = String(hex || "#ffffff").replace("#", "").padEnd(6, "f").slice(0, 6);
-  return `&H00${value.slice(4, 6)}${value.slice(2, 4)}${value.slice(0, 2).toUpperCase()}`;
+  const alpha = Math.round(255 * (1 - Math.max(0, Math.min(100, Number(opacity))) / 100)).toString(16).padStart(2, "0");
+  return `&H${alpha}${value.slice(4, 6)}${value.slice(2, 4)}${value.slice(0, 2)}`.toUpperCase();
 }
 
 function escapeAss(text) {
@@ -67,15 +69,33 @@ function escapeFilterPath(target) {
   return target.replace(/\\/g, "/").replace(/:/g, "\\:").replace(/'/g, "\\'").replace(/,/g, "\\,");
 }
 
-function createAss(subtitles, style, width, height) {
+// Mirrors CaptionOverlay in app/editor/Preview.tsx. `mode` picks zh, en or both lines.
+function createAss(subtitles, style, width, height, mode = "both") {
+  const scale = height / 1080;
   const font = String(style.fontFamily || "Arial").split(",")[0].replace(/["']/g, "").trim();
-  const fontSize = Math.max(16, Number(style.fontSize) || 34) * (height / 1080);
-  const outline = Math.max(0, Number(style.outlineWidth) || 0) * (height / 1080);
+  const fontSize = Math.max(16, Number(style.fontSize) || 34) * scale;
+  const secondarySize = fontSize * Math.max(30, Math.min(100, Number(style.enScale) || 62)) / 100;
+  const boxed = Number(style.backgroundOpacity) > 0;
+  // BorderStyle 3 draws an opaque box in OutlineColour; Outline then acts as box padding.
+  const borderStyle = boxed ? 3 : 1;
+  const outlineColour = boxed ? assColor(style.backgroundColor || "#000000", style.backgroundOpacity) : assColor(style.outlineColor);
+  const outline = boxed ? Math.max(4, fontSize * 0.18) : Math.max(0, Number(style.outlineWidth) || 0) * scale;
+  const shadow = boxed ? 0 : 1;
+  const alignment = style.position === "top" ? 8 : style.position === "middle" ? 5 : 2;
+  const marginV = style.position === "middle" ? 0 : Math.round(height * Math.max(0, Math.min(45, Number(style.offset ?? 8))) / 100);
+  const enColor = assColor(style.enColor || style.color);
   const dialogues = subtitles.map((subtitle) => {
-    const lines = [subtitle.zh, subtitle.en].filter(Boolean).map(escapeAss).join("\\N");
-    return `Dialogue: 0,${assTime(subtitle.start)},${assTime(subtitle.end)},Default,,0,0,0,,${lines}`;
-  }).join("\n");
-  return `[Script Info]\nScriptType: v4.00+\nPlayResX: ${width}\nPlayResY: ${height}\nWrapStyle: 0\nScaledBorderAndShadow: yes\n\n[V4+ Styles]\nFormat: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding\nStyle: Default,${font},${fontSize.toFixed(1)},${assColor(style.color)},${assColor(style.color)},${assColor(style.outlineColor)},&H80000000,-1,0,0,0,100,100,0,0,1,${outline.toFixed(1)},1,2,80,80,60,1\n\n[Events]\nFormat: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text\n${dialogues}\n`;
+    const zh = String(subtitle.zh || "").trim();
+    const en = String(subtitle.en || "").trim();
+    const ordered = mode === "zh" ? [["zh", zh]] : mode === "en" ? [["en", en]] : style.order === "en-first" ? [["en", en], ["zh", zh]] : [["zh", zh], ["en", en]];
+    const lines = ordered.filter(([, text]) => text).map(([lang, text], index) => {
+      const secondary = mode === "both" && index > 0;
+      const tags = [secondary ? `\\fs${secondarySize.toFixed(1)}` : "", lang === "en" && mode === "both" ? `\\c${enColor}&` : ""].join("");
+      return `${tags ? `{${tags}}` : ""}${escapeAss(text)}`;
+    });
+    return lines.length ? `Dialogue: 0,${assTime(subtitle.start)},${assTime(subtitle.end)},Default,,0,0,0,,${lines.join("\\N")}` : "";
+  }).filter(Boolean).join("\n");
+  return `[Script Info]\nScriptType: v4.00+\nPlayResX: ${width}\nPlayResY: ${height}\nWrapStyle: 0\nScaledBorderAndShadow: yes\n\n[V4+ Styles]\nFormat: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding\nStyle: Default,${font},${fontSize.toFixed(1)},${assColor(style.color)},${assColor(style.color)},${outlineColour},&H80000000,-1,0,0,0,100,100,0,0,${borderStyle},${outline.toFixed(1)},${shadow},${alignment},80,80,${marginV},1\n\n[Events]\nFormat: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text\n${dialogues}\n`;
 }
 
 function createSrt(subtitles, field) {

@@ -367,7 +367,7 @@ async function exportComposition(request, options) {
     const width = even(num(request.width, 1920));
     const height = even(num(request.height, 1080));
     const assPath = path.join(tempDir, "subtitles.ass");
-    await writeFile(assPath, createAss(request.subtitles || [], request.subtitleStyle || {}, width, height), "utf8");
+    await writeFile(assPath, createAss(request.subtitles || [], request.subtitleStyle || {}, width, height, request.subtitleMode), "utf8");
 
     // The LGPL FFmpeg build has no PNG decoder, so the host re-encodes stills to JPEG first.
     const sources = {};

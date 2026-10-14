@@ -1,8 +1,8 @@
 export {};
 
 declare global {
-  type HubConfig = { baseUrl: string; apiKey: string; model: string };
-  type HubModel = { id: string; mode: string; audioTested: boolean };
+  type AiConfig = { baseUrl: string; apiKey: string; model: string };
+  type AiModel = { id: string; mode: string };
   type TimedSubtitle = { id: number; start: number; end: number; zh: string; en: string };
   type HardwareTier = "unsupported" | "minimum" | "recommended";
 
@@ -68,6 +68,7 @@ declare global {
     audios: CompositionAudio[];
     subtitles: Array<{ start: number; end: number; zh: string; en: string }>;
     subtitleStyle: Record<string, string | number>;
+    subtitleMode: "zh" | "en" | "both";
   }
 
   interface HardwareProfile {
@@ -103,11 +104,13 @@ declare global {
       platform: string;
       version: string;
       getFilePath(file: File): string;
-      listHubModels(config: HubConfig): Promise<HubModel[]>;
-      translateSubtitles(request: { config: HubConfig; subtitles: TimedSubtitle[] }): Promise<TimedSubtitle[]>;
-      transcribeHub(request: { config: HubConfig; clips: Array<{ id: number; path: string }> }): Promise<{
+      listAiModels(config: AiConfig): Promise<AiModel[]>;
+      translateSubtitles(request: { config: AiConfig; subtitles: TimedSubtitle[] }): Promise<TimedSubtitle[]>;
+      transcribeCloud(request: { config: AiConfig; clips: Array<{ id: number; path: string }> }): Promise<{
         model: string;
         timing: "estimated";
+        failedChunks: number;
+        totalChunks: number;
         results: Array<{ clipId: number; language: string; segments: Array<{ start: number; end: number; text: string; zh: string; en: string }> }>;
       }>;
       getHardwareProfile(): Promise<HardwareProfile>;
@@ -132,11 +135,13 @@ declare global {
       saveRecording(bytes: ArrayBuffer): Promise<string>;
       requestMicrophone(): Promise<boolean>;
       onExportProgress(callback: (progress: { progress: number; stage: string }) => void): () => void;
+      onCaptionProgress(callback: (progress: { progress: number; stage: string }) => void): () => void;
       transcribeLocal(request: {
         clips: Array<{ id: number; path: string }>;
         model: string;
         device: "cpu" | "cuda";
         computeType: string;
+        hotwords?: string;
       }): Promise<{
         model: string;
         device: string;

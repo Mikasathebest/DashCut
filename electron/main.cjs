@@ -10,7 +10,7 @@ const { getModels, getRuntimeStatus, installModel, removeModel } = require("./mo
 const { exportVideo } = require("./video-export.cjs");
 const { exportComposition } = require("./composition-export.cjs");
 const { detectScenes, detectSpeechSegments, extractWaveform } = require("./smart-edit.cjs");
-const { listHubModels, translateSubtitles, transcribeHub } = require("./AI API.cjs");
+const { listModels, translateSubtitles, transcribeCloud } = require("./ai-api.cjs");
 
 let desktopServer;
 
@@ -50,14 +50,16 @@ ipcMain.handle("hardware:get-profile", async () => {
 ipcMain.handle("models:list", () => getModels(localAiOptions()));
 ipcMain.handle("models:install", (_event, model) => installModel(model, localAiOptions()));
 ipcMain.handle("models:remove", (_event, model) => removeModel(model, localAiOptions()));
-ipcMain.handle("transcription:local", (_event, request) => {
+// Caption jobs report { progress: 0..1, stage } to the window that started them.
+const captionProgress = (event) => (progress) => { if (!event.sender.isDestroyed()) event.sender.send("captions:progress", progress); };
+ipcMain.handle("transcription:local", (event, request) => {
   const options = localAiOptions();
-  return transcribeLocal(request, { ...options, getRuntimeStatus: () => getRuntimeStatus(options) });
+  return transcribeLocal(request, { ...options, getRuntimeStatus: () => getRuntimeStatus(options), onProgress: captionProgress(event) });
 });
-ipcMain.handle("hub:models", (_event, config) => listHubModels(config));
-ipcMain.handle("hub:translate", (_event, request) => translateSubtitles(request));
-ipcMain.handle("hub:transcribe", (_event, request) => transcribeHub(request, {
-  tempPath: app.getPath("temp"), ffmpegPath: mediaRuntimePath(),
+ipcMain.handle("ai:models", (_event, config) => listModels(config));
+ipcMain.handle("ai:translate", (event, request) => translateSubtitles(request, { onProgress: captionProgress(event) }));
+ipcMain.handle("ai:transcribe", (event, request) => transcribeCloud(request, {
+  tempPath: app.getPath("temp"), ffmpegPath: mediaRuntimePath(), onProgress: captionProgress(event),
 }));
 ipcMain.handle("export:video", async (event, request) => {
   const result = await dialog.showSaveDialog({

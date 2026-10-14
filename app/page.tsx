@@ -9,22 +9,24 @@ import {
   mainTrack, placeClip, Project, projectDuration, pruneTracks, replaceWithRanges, sourceRangeToTimeline, sourceTimeAt, splitAtSourceTimes, splitClip,
   Subtitle, toComposition, trackClips, trimAt, uid, updateClip, createProject,
 } from "./editor/model";
-import { Preview, SubtitleStyle } from "./editor/Preview";
-import { DropTarget, formatClock, Timeline, TimelineMode, TimelineSettings, TimelineToolbar, Toggles, ToolbarAction } from "./editor/Timeline";
+import { defaultSubtitleStyle, retimeSubtitle, shiftSubtitles, SubtitleStyle } from "./editor/captions";
+import { CaptionStyleEditor, CaptionTimingBar } from "./editor/CaptionTools";
+import { Preview } from "./editor/Preview";
+import { clampZoom, DropTarget, formatClock, Timeline, TimelineMode, TimelineSettings, TimelineToolbar, Toggles, ToolbarAction } from "./editor/Timeline";
 
 type LeftTab = "media" | "subtitles";
 type MediaFilter = "all" | "video" | "image" | "audio";
 type RecognitionEngine = "cloud" | "local";
 type History = { past: Project[]; present: Project; future: Project[]; key: string; at: number };
 
-const defaultSubtitleStyle: SubtitleStyle = {
-  fontFamily: 'Arial, "PingFang SC", "Microsoft YaHei", sans-serif',
-  fontSize: 34,
-  color: "#ffffff",
-  outlineColor: "#111111",
-  outlineWidth: 2,
-  backgroundOpacity: 35,
-};
+// Endpoint and model are remembered between sessions; the API key never is.
+const aiSettingsKey = "dashcut.ai-settings";
+function savedAiSettings() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(aiSettingsKey) || "{}");
+    return { baseUrl: typeof saved.baseUrl === "string" ? saved.baseUrl : "", model: typeof saved.model === "string" ? saved.model : "" };
+  } catch { return { baseUrl: "", model: "" }; }
+}
 const kindLabels: Record<Asset["kind"], string> = { video: "视频", image: "图片", gif: "动图", audio: "音频" };
 const freezeLength = 3;
 
@@ -81,10 +83,12 @@ export default function Home() {
   const [localModels, setLocalModels] = useState<LocalModelInfo[]>([]);
   const [selectedModel, setSelectedModel] = useState<LocalModelInfo["id"]>("small");
   const [installingModel, setInstallingModel] = useState<string>("");
-  const [hubConfig, setHubConfig] = useState<HubConfig>({ baseUrl: "https://api.example.com/v1", apiKey: "", model: "qwen3-next-80b-a3b-instruct" });
-  const [hubAudioModel, setHubAudioModel] = useState("us/gcp/google/gemini-2.5-flash");
-  const [hubModels, setHubModels] = useState<HubModel[]>([]);
-  const [loadingHubModels, setLoadingHubModels] = useState(false);
+  const [aiConfig, setAiConfig] = useState<AiConfig>({ baseUrl: "", apiKey: "", model: "" });
+  const [aiModels, setAiModels] = useState<AiModel[]>([]);
+  const [loadingAiModels, setLoadingAiModels] = useState(false);
+  const [captionProgress, setCaptionProgress] = useState<{ progress: number; stage: string } | null>(null);
+  const [selectedSubtitle, setSelectedSubtitle] = useState<number | null>(null);
+  const [hotwords, setHotwords] = useState("");
   const [autoTranslate, setAutoTranslate] = useState(true);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -120,6 +124,22 @@ export default function Home() {
   function redo() {
     setHistory((state) => state.future.length ? { past: [...state.past, state.present], present: state.future[0], future: state.future.slice(1), key: "", at: 0 } : state);
   }
+
+  /* ------------------------------------------------------------ AI settings and caption progress */
+
+  useEffect(() => {
+    const saved = savedAiSettings();
+    // Restored after mount so server and client render the same initial markup.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setAiConfig((config) => ({ ...config, ...saved }));
+  }, []);
+
+  useEffect(() => {
+    try { localStorage.setItem(aiSettingsKey, JSON.stringify({ baseUrl: aiConfig.baseUrl, model: aiConfig.model })); }
+    catch { /* storage unavailable: settings last for this session only */ }
+  }, [aiConfig.baseUrl, aiConfig.model]);
+
+  useEffect(() => window.dashCutDesktop?.onCaptionProgress?.((value) => setCaptionProgress(value)), []);
 
   /* ------------------------------------------------------------ playback clock */
 
@@ -459,7 +479,7 @@ export default function Home() {
       case "smart-talk": return void smartTalk();
       case "smart-scenes": return void smartScenes();
       case "record": return void toggleRecording();
-      case "fit": return setZoom(Math.max(2, Math.min(400, viewportWidth / Math.max(duration * 1.05, 5))));
+      case "fit": return setZoom(clampZoom(viewportWidth / Math.max(duration * 1.05, 5)));
     }
   }
 
@@ -523,8 +543,10 @@ export default function Home() {
   async function generateSubtitles() {
     if (isGenerating) return;
     if (recognitionEngine === "cloud" || autoTranslate) {
-      if (!window.dashCutDesktop) return setToast("AI API 字幕仅支持桌面版");
-      if (!hubConfig.apiKey.trim()) return setToast("请先填写 AI API API Key，或关闭云端翻译以离线识别");
+      if (!window.dashCutDesktop) return setToast("云端字幕仅支持桌面版");
+      if (!aiConfig.baseUrl.trim() || !aiConfig.apiKey.trim() || !aiConfig.model.trim()) {
+        return setToast(recognitionEngine === "cloud" ? "请先填写 API Base URL、API Key 并选择模型" : "请先填写 API 设置，或关闭自动翻译以离线识别");
+      }
     }
     const sources = captionSources();
     if (recognitionEngine === "local") {
@@ -546,6 +568,7 @@ export default function Home() {
       }
       if (!sources.length) return setToast("时间轴中没有含人声的视频或音频");
       setIsGenerating(true);
+      setCaptionProgress({ progress: 0, stage: "正在加载本地模型" });
       try {
         const useCuda = Boolean(hardware.gpus.some((gpu) => gpu.fasterWhisperAcceleration) && Number(hardware.runtime.info?.cudaDeviceCount) > 0);
         const response = await window.dashCutDesktop.transcribeLocal({
@@ -553,14 +576,17 @@ export default function Home() {
           model: selectedModel,
           device: useCuda ? "cuda" : "cpu",
           computeType: hardware.assessment.computeType,
+          hotwords,
         });
+        setCaptionProgress({ progress: 1, stage: "识别完成" });
         const generated = placeCaptions(sources, response.results, false);
         setSubtitles(generated);
         if (autoTranslate && generated.length) {
           setToast("本地识别完成，正在生成中英译文…");
+          setCaptionProgress({ progress: 0, stage: "正在翻译" });
           try {
-            setSubtitles(await window.dashCutDesktop.translateSubtitles({ config: hubConfig, subtitles: generated }));
-            setToast(`双语字幕完成 · ${response.model} + AI API（保留识别时间戳）`);
+            setSubtitles(await window.dashCutDesktop.translateSubtitles({ config: aiConfig, subtitles: generated }));
+            setToast(`双语字幕完成 · ${response.model} + ${aiConfig.model}（保留识别时间戳）`);
           } catch (error) {
             setToast(`已保留原语言字幕；翻译失败：${error instanceof Error ? error.message : "请重试"}`);
           }
@@ -569,50 +595,66 @@ export default function Home() {
         setToast(error instanceof Error ? error.message : "本地识别失败");
       } finally {
         setIsGenerating(false);
+        setCaptionProgress(null);
       }
       return;
     }
     if (!window.dashCutDesktop) return;
     if (!sources.length) return setToast("时间轴中没有含人声的视频或音频");
     setIsGenerating(true);
+    setCaptionProgress({ progress: 0, stage: "正在提取音轨" });
     try {
-      const response = await window.dashCutDesktop.transcribeHub({ config: { ...hubConfig, model: hubAudioModel }, clips: sources.map((source) => ({ id: source.id, path: source.asset.sourcePath })) });
+      const response = await window.dashCutDesktop.transcribeCloud({ config: aiConfig, clips: sources.map((source) => ({ id: source.id, path: source.asset.sourcePath })) });
       setSubtitles(placeCaptions(sources, response.results, true));
-      setToast("云端双语字幕完成，时间为模型估算，请试听校准；准确同步建议本地 Whisper + 云端翻译");
+      setToast(response.failedChunks
+        ? `云端字幕完成，但有 ${response.failedChunks}/${response.totalChunks} 段识别失败，可重试或改用本地识别`
+        : "云端双语字幕完成，时间为模型估算；如整体偏早或偏晚，可用“时间偏移”一键校准");
     } catch (error) {
       setToast(error instanceof Error ? error.message : "云端识别失败");
-    } finally { setIsGenerating(false); }
+    } finally {
+      setIsGenerating(false);
+      setCaptionProgress(null);
+    }
   }
 
-  async function refreshHubModels() {
+  async function refreshAiModels() {
     if (!window.dashCutDesktop) return setToast("模型查询仅支持桌面版");
-    setLoadingHubModels(true);
+    setLoadingAiModels(true);
     try {
-      const models = await window.dashCutDesktop.listHubModels(hubConfig);
-      setHubModels(models);
-      setToast(`已查询 ${models.length} 个模型；模型列表不保证音频支持`);
+      const models = await window.dashCutDesktop.listAiModels(aiConfig);
+      setAiModels(models);
+      setToast(`已查询 ${models.length} 个模型；云端识别需选择支持音频输入的模型`);
     } catch (error) { setToast(error instanceof Error ? error.message : "模型查询失败"); }
-    finally { setLoadingHubModels(false); }
+    finally { setLoadingAiModels(false); }
   }
 
   async function translateExistingSubtitles() {
     if (!window.dashCutDesktop || isGenerating || !project.subtitles.length) return;
+    if (!aiConfig.baseUrl.trim() || !aiConfig.apiKey.trim() || !aiConfig.model.trim()) return setToast("请先填写 API Base URL、API Key 并选择模型");
     setIsGenerating(true);
+    setCaptionProgress({ progress: 0, stage: "正在翻译" });
     try {
-      setSubtitles(await window.dashCutDesktop.translateSubtitles({ config: hubConfig, subtitles: project.subtitles }));
+      setSubtitles(await window.dashCutDesktop.translateSubtitles({ config: aiConfig, subtitles: project.subtitles }));
       setToast("中英译文已更新，字幕时间保持不变");
     } catch (error) { setToast(error instanceof Error ? error.message : "翻译失败，原字幕已保留"); }
-    finally { setIsGenerating(false); }
+    finally { setIsGenerating(false); setCaptionProgress(null); }
   }
 
+  // Changing a start moves this caption and every later one; extending an end pushes later captions only on overlap.
   function updateSubtitleTime(id: number, field: "start" | "end", value: number) {
     const subtitle = project.subtitles.find((item) => item.id === id);
-    if (!subtitle || !Number.isFinite(value) || value < 0 || value > duration || (field === "start" ? value >= subtitle.end : value <= subtitle.start)) {
-      setToast("字幕时间必须在时间线范围内，结束时间大于开始时间");
+    if (!subtitle || !Number.isFinite(value) || value < 0 || (field === "end" && value <= subtitle.start)) {
+      setToast("字幕时间不能为负，结束时间必须大于开始时间");
       return false;
     }
-    setSubtitles(project.subtitles.map((item) => item.id === id ? { ...item, [field]: value } : item).sort((a, b) => a.start - b.start));
+    setSubtitles(retimeSubtitle(project.subtitles, id, field, value));
     return true;
+  }
+
+  function shiftCaptions(delta: number, fromSelected: boolean) {
+    if (!project.subtitles.length) return;
+    setSubtitles(shiftSubtitles(project.subtitles, delta, fromSelected ? selectedSubtitle : null), "caption-shift");
+    setToast(`${fromSelected ? "选中及之后的" : "全部"}字幕已${delta > 0 ? "延后" : "提前"} ${Math.abs(delta)} 秒`);
   }
 
   function updateSubtitle(id: number, field: "zh" | "en", value: string) {
@@ -665,9 +707,6 @@ export default function Home() {
     setToast(`${model} 模型已删除`);
   }
 
-  function updateSubtitleStyle<K extends keyof SubtitleStyle>(key: K, value: SubtitleStyle[K]) {
-    setSubtitleStyle((style) => ({ ...style, [key]: value }));
-  }
 
   /* ------------------------------------------------------------ export & cover */
 
@@ -680,7 +719,7 @@ export default function Home() {
     setProgress(0);
     setProgressStage("正在准备导出");
     try {
-      const request = toComposition(project, assets, { ratio, resolution: exportResolution, fps: exportFps, platform, subtitleStyle });
+      const request = toComposition(project, assets, { ratio, resolution: exportResolution, fps: exportFps, platform, subtitleStyle, subtitleMode });
       const result = await window.dashCutDesktop.exportComposition(request);
       if (!result.canceled && result.outputPath) {
         setExportResult({ outputPath: result.outputPath, subtitleFiles: result.subtitleFiles ?? [] });
@@ -797,36 +836,35 @@ export default function Home() {
     {!assets.length && <p className="empty-hint">导入的素材会按导入顺序显示在这里，不会自动放入时间轴。把素材拖到时间轴的轨道上即可使用；拖到轨道上方的空白处会新建画中画轨，用来叠加图片和视频。</p>}
   </>;
 
+  const percent = captionProgress ? Math.round(captionProgress.progress * 100) : 0;
   const subtitlesPanel = <>
     <div className="language-switch"><button className={subtitleMode === "zh" ? "active" : ""} onClick={() => setSubtitleMode("zh")}>中文</button><button className={subtitleMode === "en" ? "active" : ""} onClick={() => setSubtitleMode("en")}>English</button><button className={subtitleMode === "both" ? "active" : ""} onClick={() => setSubtitleMode("both")}>中英双语</button></div>
-    <div className="engine-switch"><button className={recognitionEngine === "cloud" ? "active" : ""} onClick={() => setRecognitionEngine("cloud")}><b>☁</b><span>云端模型<small>速度快 · 需要网络</small></span></button><button className={recognitionEngine === "local" ? "active" : ""} onClick={() => { setRecognitionEngine("local"); void checkHardware(); }}><b>⌁</b><span>本地模型<small>离线 · 保护隐私</small></span></button></div>
-    <details className="hub-settings">
-      <summary>AI API · 中英字幕</summary>
-      <p>准确同步推荐：本地 Whisper large-v3 + 云端翻译。云端识别时间为估算，可手动校准。</p>
-      <label>API base URL<input value={hubConfig.baseUrl} disabled={isGenerating || loadingHubModels} onChange={(event) => { setHubModels([]); setHubConfig({ ...hubConfig, baseUrl: event.target.value }); }} /></label>
-      <label>API Key（仅本次会话）<input type="password" autoComplete="off" value={hubConfig.apiKey} disabled={isGenerating || loadingHubModels} onChange={(event) => setHubConfig({ ...hubConfig, apiKey: event.target.value })} placeholder="输入密钥，不保存到磁盘" /></label>
-      <button className="ghost-action" disabled={loadingHubModels || isGenerating} onClick={() => void refreshHubModels()}>{loadingHubModels ? "正在查询…" : `查询可用模型${hubModels.length ? ` (${hubModels.length})` : ""}`}</button>
-      {recognitionEngine === "cloud" ? <label>音频识别模型<select value={hubAudioModel} disabled={isGenerating} onChange={(event) => setHubAudioModel(event.target.value)}><option value="us/gcp/google/gemini-2.5-flash">Gemini 2.5 Flash · 已测试音频</option><option value="us/gcp/google/gemini-3.5-flash">Gemini 3.5 Flash · 已测试音频</option></select></label> : <label className="hub-checkbox"><input type="checkbox" checked={autoTranslate} disabled={isGenerating} onChange={(event) => setAutoTranslate(event.target.checked)} />识别后自动生成中英译文</label>}
-      <label>翻译模型<input list="hub-models" value={hubConfig.model} disabled={isGenerating} onChange={(event) => setHubConfig({ ...hubConfig, model: event.target.value })} /><datalist id="hub-models">{hubModels.filter((model) => model.mode === "chat").map((model) => <option key={model.id} value={model.id} />)}</datalist></label>
-      <small>{recognitionEngine === "cloud" ? "生成时会将视频音轨发送到接口。" : autoTranslate ? "生成时仅将识别后的字幕文本发送到接口。" : "关闭自动翻译时，本地识别可离线运行。"}</small>
+    <div className="engine-switch"><button className={recognitionEngine === "cloud" ? "active" : ""} onClick={() => setRecognitionEngine("cloud")}><b>☁</b><span>云端模型<small>需要网络 · 估算时间</small></span></button><button className={recognitionEngine === "local" ? "active" : ""} onClick={() => { setRecognitionEngine("local"); void checkHardware(); }}><b>⌁</b><span>本地模型<small>离线 · 精确时间</small></span></button></div>
+    <details className="ai-settings" open={!aiConfig.baseUrl || !aiConfig.model}>
+      <summary>API 设置{aiConfig.model ? ` · ${aiConfig.model}` : ""}</summary>
+      <label>API Base URL<input value={aiConfig.baseUrl} placeholder="https://…/v1" disabled={isGenerating || loadingAiModels} onChange={(event) => { setAiModels([]); setAiConfig({ ...aiConfig, baseUrl: event.target.value }); }} /></label>
+      <label>API Key<input type="password" autoComplete="off" value={aiConfig.apiKey} disabled={isGenerating || loadingAiModels} onChange={(event) => setAiConfig({ ...aiConfig, apiKey: event.target.value })} placeholder="仅本次会话使用，不保存到磁盘" /></label>
+      <label>模型<span className="model-picker"><input list="ai-models" value={aiConfig.model} placeholder="选择或输入模型 ID" disabled={isGenerating} onChange={(event) => setAiConfig({ ...aiConfig, model: event.target.value })} /><button className="ghost-action" disabled={loadingAiModels || isGenerating} onClick={() => void refreshAiModels()}>{loadingAiModels ? "查询中…" : aiModels.length ? `刷新 (${aiModels.length})` : "查询"}</button></span><datalist id="ai-models">{aiModels.map((model) => <option key={model.id} value={model.id} />)}</datalist></label>
+      {recognitionEngine === "local" && <label className="ai-checkbox"><input type="checkbox" checked={autoTranslate} disabled={isGenerating} onChange={(event) => setAutoTranslate(event.target.checked)} />识别后自动生成中英译文</label>}
+      <small>{recognitionEngine === "cloud" ? "云端识别会上传音轨，需选择支持音频输入的模型。" : autoTranslate ? "本地识别后仅将字幕文本发送到接口翻译。" : "关闭自动翻译时，本地识别完全离线。"}</small>
       <button className="ghost-action" disabled={isGenerating || !project.subtitles.length} onClick={() => void translateExistingSubtitles()}>翻译当前字幕 · 保留时间戳</button>
     </details>
-    <button className="generate-button" onClick={generateSubtitles} disabled={isGenerating}><span>{isGenerating ? "◌" : "✦"}</span><strong>{isGenerating ? "正在识别人声…" : "识别字幕"}</strong><small>{isGenerating ? "正在分析音轨与语义" : "普通话 / English · 自动断句"}</small></button>
-    <div className="recognition-meta"><span><i></i> {recognitionEngine === "cloud" ? "Gemini 音频 · 估算时间" : hardware?.assessment.tier === "recommended" ? "本地模式 · 推荐配置" : "本地模式 · 需要检测"}</span><button onClick={() => setStyleOpen(!styleOpen)}>字幕样式 {styleOpen ? "⌃" : "⌄"}</button></div>
-    {styleOpen && <div className="subtitle-style-editor">
-      <div className="style-editor-title"><strong>全局字幕样式</strong><span>自动应用到全部字幕</span></div>
-      <label>字体<select value={subtitleStyle.fontFamily} onChange={(event) => updateSubtitleStyle("fontFamily", event.target.value)}><option value={'Arial, "PingFang SC", "Microsoft YaHei", sans-serif'}>系统黑体</option><option value={'Georgia, "Songti SC", serif'}>中英衬线</option><option value={'"Arial Black", "PingFang SC", sans-serif'}>醒目粗体</option><option value={'"Courier New", monospace'}>等宽字体</option></select></label>
-      <label>字号 <b>{subtitleStyle.fontSize}px</b><input type="range" min="20" max="64" value={subtitleStyle.fontSize} onChange={(event) => updateSubtitleStyle("fontSize", Number(event.target.value))}/></label>
-      <div className="style-color-grid"><label>文字颜色<input type="color" value={subtitleStyle.color} onChange={(event) => updateSubtitleStyle("color", event.target.value)}/></label><label>描边颜色<input type="color" value={subtitleStyle.outlineColor} onChange={(event) => updateSubtitleStyle("outlineColor", event.target.value)}/></label></div>
-      <label>描边 <b>{subtitleStyle.outlineWidth}px</b><input type="range" min="0" max="6" value={subtitleStyle.outlineWidth} onChange={(event) => updateSubtitleStyle("outlineWidth", Number(event.target.value))}/></label>
-      <button className="reset-style" onClick={() => setSubtitleStyle(defaultSubtitleStyle)}>恢复默认样式</button>
-    </div>}
+    {recognitionEngine === "local" && <label className="hotwords-field">专有名词<input value={hotwords} disabled={isGenerating} placeholder="人名、品牌、术语，空格分隔" onChange={(event) => setHotwords(event.target.value)} /></label>}
+    <button className={`generate-button${isGenerating ? " running" : ""}`} onClick={generateSubtitles} disabled={isGenerating}>
+      <span>{isGenerating ? "◌" : "✦"}</span>
+      <strong>{isGenerating ? `正在识别 ${percent}%` : "识别字幕"}</strong>
+      <small>{isGenerating ? captionProgress?.stage || "正在准备" : "普通话 / English · 自动断句"}</small>
+      {isGenerating && <i className="caption-progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}><i style={{ width: `${percent}%` }} /></i>}
+    </button>
+    <div className="recognition-meta"><span><i></i> {recognitionEngine === "cloud" ? "云端识别 · 估算时间" : hardware?.assessment.tier === "recommended" ? "本地模式 · 推荐配置" : "本地模式 · 需要检测"}</span><button onClick={() => setStyleOpen(!styleOpen)}>字幕样式 {styleOpen ? "⌃" : "⌄"}</button></div>
+    {styleOpen && <CaptionStyleEditor style={subtitleStyle} onChange={setSubtitleStyle} />}
+    {project.subtitles.length > 0 && <CaptionTimingBar disabled={isGenerating} selected={selectedSubtitle !== null && project.subtitles.some((item) => item.id === selectedSubtitle)} onShift={shiftCaptions} />}
     <div className="subtitle-list">
-      {project.subtitles.map((item) => <div className={`subtitle-row ${current >= item.start && current < item.end ? "active" : ""}`} key={item.id} onClick={() => seek(item.start + 0.05)}>
+      {project.subtitles.map((item) => <div className={`subtitle-row${current >= item.start && current < item.end ? " active" : ""}${selectedSubtitle === item.id ? " selected" : ""}`} key={item.id} ref={selectedSubtitle === item.id ? (element) => element?.scrollIntoView({ block: "nearest" }) : undefined} onClick={() => { setSelectedSubtitle(item.id); seek(item.start + 0.05); }}>
         <time>{formatClock(item.start).slice(0, 5)}</time><div>
           {subtitleMode !== "en" && <input disabled={isGenerating} value={item.zh} onChange={(event) => updateSubtitle(item.id, "zh", event.target.value)} />}
           {subtitleMode !== "zh" && <input disabled={isGenerating} className="translation" value={item.en} onChange={(event) => updateSubtitle(item.id, "en", event.target.value)} />}
-          <div className="subtitle-timing" onClick={(event) => event.stopPropagation()}>{(["start", "end"] as const).map((field) => <label key={field}>{field === "start" ? "起" : "止"}<input key={item[field]} aria-label={`${field === "start" ? "开始" : "结束"}时间（秒）`} type="number" min="0" max={duration} step="0.01" defaultValue={item[field].toFixed(2)} disabled={isGenerating} onBlur={(event) => { if (!updateSubtitleTime(item.id, field, event.currentTarget.valueAsNumber)) event.currentTarget.value = item[field].toFixed(2); }} /></label>)}</div>
+          <div className="subtitle-timing" onClick={(event) => event.stopPropagation()}>{(["start", "end"] as const).map((field) => <label key={field}>{field === "start" ? "起" : "止"}<input key={item[field]} aria-label={`${field === "start" ? "开始" : "结束"}时间（秒）`} type="number" min="0" step="0.1" defaultValue={item[field].toFixed(2)} disabled={isGenerating} onBlur={(event) => { if (!updateSubtitleTime(item.id, field, event.currentTarget.valueAsNumber)) event.currentTarget.value = item[field].toFixed(2); }} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }} /></label>)}</div>
         </div><button title="删除字幕" onClick={(event) => { event.stopPropagation(); setSubtitles(project.subtitles.filter((subtitle) => subtitle.id !== item.id)); }}>×</button>
       </div>)}
       {!project.subtitles.length && <p className="empty-hint">把含人声的视频或音频拖到时间轴，选择识别模型后生成字幕。</p>}
@@ -861,12 +899,15 @@ export default function Home() {
 
     <section className="timeline-area">
       <TimelineToolbar mode={mode} onMode={setMode} canUndo={history.past.length > 0} canRedo={history.future.length > 0} hasSelection={selectedClips.length > 0} selectionIsVideo={primaryAsset?.kind === "video" && primaryClip?.freezeAt === null} recording={recording} toggles={toggles} zoom={zoom} settings={timelineSettings}
-        onAction={runAction} onToggle={(key) => setToggles((value) => ({ ...value, [key]: !value[key] }))} onZoom={(value) => setZoom(Math.max(2, Math.min(400, value)))} onSettings={setTimelineSettings} />
+        onAction={runAction} onToggle={(key) => setToggles((value) => ({ ...value, [key]: !value[key] }))} onZoom={(value) => setZoom(clampZoom(value))} onSettings={setTimelineSettings} />
       <Timeline project={project} assets={assetMap} time={current} hoverTime={hoverTime} duration={duration} selection={selection} mode={mode} toggles={toggles} zoom={zoom} settings={timelineSettings} coverImage={coverImage || mainThumb} draggingAssetId={draggingAssetId}
         onSeek={seek} onHover={setHoverTime} onSelect={setSelection} onDropAsset={dropAsset} onMoveClip={moveClip} onTrimClip={trimClip} onBlade={bladeSplit}
         onTrack={(trackId, patch) => commit((state) => ({ ...state, tracks: state.tracks.map((track) => track.id === trackId ? { ...track, ...patch } : track) }))}
         onRemoveMarker={(id) => commit((state) => ({ ...state, markers: state.markers.filter((marker) => marker.id !== id) }))}
-        onZoom={(value) => setZoom(Math.max(2, Math.min(400, value)))} onCover={() => setCoverOpen(true)} onViewport={setViewportWidth} />
+        onZoom={(value) => setZoom(clampZoom(value))} onCover={() => setCoverOpen(true)} onViewport={setViewportWidth}
+        subtitleMode={subtitleMode} selectedSubtitle={selectedSubtitle}
+        onSelectSubtitle={(id) => { setSelectedSubtitle(id); if (id !== null) setLeftTab("subtitles"); }}
+        onSubtitleChange={(id, patch) => setSubtitles(project.subtitles.map((item) => item.id === id ? { ...item, ...patch } : item).sort((a, b) => a.start - b.start))} />
     </section>
 
     {typeof recording === "number" && <div className="countdown-overlay"><span>{recording}</span><small>即将开始录音</small></div>}
@@ -901,7 +942,7 @@ export default function Home() {
         <div className="runtime-status"><strong>内置运行时</strong><span className={hardware.runtime?.ready ? "ready" : ""}>{hardware.runtime?.ready ? `${hardware.runtime.kind === "bundled" ? "随安装包提供" : "开发环境"} · faster-whisper ${hardware.runtime.info?.fasterWhisper ?? ""}` : "不可用，请重新安装 DashCut 极剪"}</span></div>
         {!!hardware.assessment.blockers.length && <div className="hardware-messages blockers"><b>需要解决</b>{hardware.assessment.blockers.map((item) => <span key={item}>• {item}</span>)}</div>}
         {!!hardware.assessment.notes.length && <div className="hardware-messages"><b>检测说明</b>{hardware.assessment.notes.map((item) => <span key={item}>• {item}</span>)}</div>}
-        <div className="requirements-table"><div><b>最低配置</b><span>4 核 CPU</span><span>8 GB RAM</span><span>4 GB 空间</span><small>small · CPU INT8</small></div><div><b>推荐配置</b><span>8 核 CPU</span><span>16 GB RAM</span><span>CUDA 8 GB VRAM</span><small>large-v3 · CUDA FP16</small></div></div>
+        <div className="requirements-table"><div><b>最低配置</b><span>4 核 CPU</span><span>8 GB RAM</span><span>4 GB 空间</span><small>small · CPU INT8</small></div><div><b>推荐配置</b><span>8 核 CPU</span><span>16 GB RAM</span><span>8 GB 显存 CUDA GPU</span><small>large-v3 · CUDA FP16</small></div></div>
         <section className="model-manager"><header><div><b>选择推理模型</b><small>默认不下载，仅在你点击后安装</small></div><span>推荐：{hardware.assessment.model}</span></header><div className="model-list">{localModels.map((model) => <button key={model.id} className={`${selectedModel === model.id ? "selected" : ""} ${model.id === hardware.assessment.model ? "recommended" : ""}`} onClick={() => setSelectedModel(model.id)}><span className="model-radio">{selectedModel === model.id ? "●" : "○"}</span><div><b>{model.label} {model.id === hardware.assessment.model && <i>推荐</i>}</b><small>{model.description} · 约 {model.approximateGb} GB</small></div>{model.installed ? <span className="model-installed">已安装</span> : <span className="model-not-installed">未下载</span>}</button>)}</div>
           {localModels.find((model) => model.id === selectedModel)?.installed ? <div className="model-action-row"><span>模型已就绪，可离线使用</span><button onClick={() => void removeLocalModel(selectedModel)}>删除模型</button></div> : <button className="primary full" disabled={Boolean(installingModel) || hardware.assessment.tier === "unsupported" || !hardware.runtime?.ready} onClick={() => void installLocalModel(selectedModel)}>{installingModel === selectedModel ? `正在下载安装 ${selectedModel}…` : `下载安装 ${selectedModel} · 约 ${localModels.find((model) => model.id === selectedModel)?.approximateGb ?? "-"} GB`}</button>}
         </section>
