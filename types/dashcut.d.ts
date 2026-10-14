@@ -4,6 +4,14 @@ declare global {
   type AiConfig = { baseUrl: string; apiKey: string; model: string };
   type AiModel = { id: string; mode: string };
   type TimedSubtitle = { id: number; start: number; end: number; zh: string; en: string };
+  type AgentProviderConfig = { kind: "openai" | "anthropic"; baseUrl: string; model: string; hasKey: { openai: boolean; anthropic: boolean }; persistentKeys: boolean };
+  type AgentEvent = { runId: string } & (
+    | { type: "start" | "end" | "stopped" }
+    | { type: "assistant" | "done"; text: string }
+    | { type: "tool-call"; id: string; name: string; arguments: Record<string, unknown> }
+    | { type: "tool-result"; id: string; name: string; result: unknown }
+    | { type: "error"; message: string }
+  );
   type HardwareTier = "unsupported" | "minimum" | "recommended";
 
   /*
@@ -146,6 +154,15 @@ declare global {
       locateMedia(request: { name: string; otherNames: string[] }): Promise<{ canceled?: boolean; path?: string; siblings?: Record<string, string> }>;
       setProjectState(state: { dirty: boolean; id: string }): Promise<void>;
       closeReady(): Promise<void>;
+      agentConfig(): Promise<AgentProviderConfig>;
+      saveAgentConfig(config: { kind: "openai" | "anthropic"; baseUrl: string; model: string; apiKey?: string }): Promise<AgentProviderConfig>;
+      clearAgentKey(kind: "openai" | "anthropic"): Promise<void>;
+      agentSend(request: { message: string; system: string; tools: Array<{ name: string; description: string; parameters: unknown }> }): Promise<{ runId: string }>;
+      agentStop(): Promise<void>;
+      agentReset(): Promise<void>;
+      agentToolResponse(response: { requestId: string; result?: unknown; error?: string }): Promise<void>;
+      onAgentEvent(callback: (event: AgentEvent) => void): () => void;
+      onAgentToolRequest(callback: (request: { requestId: string; name: string; args: Record<string, unknown> }) => void): () => void;
       onMenuCommand(callback: (command: string) => void): () => void;
       onExportProgress(callback: (progress: { progress: number; stage: string }) => void): () => void;
       onCaptionProgress(callback: (progress: { progress: number; stage: string }) => void): () => void;

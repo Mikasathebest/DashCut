@@ -47,7 +47,9 @@ export type TimedWord = { start: number; end: number; text: string; prob: number
 export type Subtitle = { id: number; start: number; end: number; zh: string; en: string; words?: TimedWord[] };
 /** Speech recognised for one asset, in source seconds; sentences are the recogniser's segments. */
 export type Transcript = { language: string; source: "local" | "cloud"; words: TimedWord[]; sentences: Array<{ start: number; end: number }> };
-export type Project = { tracks: Track[]; clips: Clip[]; markers: Marker[]; subtitles: Subtitle[]; transcripts?: Record<string, Transcript> };
+/** Canvas and caption settings captured into history by edits that change them (e.g. the assistant). */
+export type ProjectView = { ratio: "16:9" | "9:16"; captionStyle: Record<string, unknown>; captionMode: "zh" | "en" | "both" };
+export type Project = { tracks: Track[]; clips: Clip[]; markers: Marker[]; subtitles: Subtitle[]; transcripts?: Record<string, Transcript>; view?: ProjectView };
 export type EditOptions = { magnet: boolean; linkage: boolean };
 
 export const defaultStillDuration = 3;

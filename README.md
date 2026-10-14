@@ -68,6 +68,12 @@ Windows x64 releases produce an unsigned one-click `.exe` without credentials; W
 2. Select words by clicking, dragging or shift-clicking, then press ⌫. The matching video, audio and captions are cut and the timeline closes the gap. It is one undo step.
 3. **Smart clean cut**, in the transcript tab or the toolbar, lists filler words (嗯/啊/um/uh), stutters, long pauses and abandoned retakes. Fillers that are often real words (那个/就是/like/so) are listed but left unchecked. Review the list, adjust the pause threshold or filler lists, then apply the checked items. Clips without a transcript fall back to silence detection.
 
+### Edit with 极剪助手 (the AI assistant)
+
+1. Click **✦ 极剪助手** in the top bar (⌘J). In settings (**…**), choose **Claude (Anthropic API)** or any **OpenAI-compatible** endpoint with tool calling, then enter the model and API key. Keys are encrypted with the macOS keychain via Electron `safeStorage` and never written to disk in plain text. A model server on `http://127.0.0.1` (Ollama, LM Studio) also works.
+2. Describe the edit, or pick a built-in task: **口播精剪** (clean talking-head cut), **双语字幕** (bilingual captions), **60 秒精华** (60-second highlight) or **转竖屏 9:16** (reformat to vertical).
+3. The assistant reads a compact view of the timeline and shows a plan. Nothing changes until you click **确认执行**; **修改方案** sends your feedback instead. Edits are validated as a batch and applied as one step, so ⌘Z or **撤销这次修改** reverts all of them, including canvas and caption-style changes. **停止** cancels a running task.
+
 ### Save, reopen and recover projects
 
 - **File → Save** (⌘S) writes a `.dashcut` project file. Media is referenced, not copied: paths are stored relative to the project file, so moving the project folder together with its media keeps working.

@@ -33,6 +33,23 @@ contextBridge.exposeInMainWorld("dashCutDesktop", {
   locateMedia: (request) => ipcRenderer.invoke("project:locate", request),
   setProjectState: (state) => ipcRenderer.invoke("project:state", state),
   closeReady: () => ipcRenderer.invoke("project:close-ready"),
+  agentConfig: () => ipcRenderer.invoke("agent:config"),
+  saveAgentConfig: (config) => ipcRenderer.invoke("agent:save-config", config),
+  clearAgentKey: (kind) => ipcRenderer.invoke("agent:clear-key", kind),
+  agentSend: (request) => ipcRenderer.invoke("agent:send", request),
+  agentStop: () => ipcRenderer.invoke("agent:stop"),
+  agentReset: () => ipcRenderer.invoke("agent:reset"),
+  agentToolResponse: (response) => ipcRenderer.invoke("agent:tool-response", response),
+  onAgentEvent: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on("agent:event", listener);
+    return () => ipcRenderer.removeListener("agent:event", listener);
+  },
+  onAgentToolRequest: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on("agent:tool-request", listener);
+    return () => ipcRenderer.removeListener("agent:tool-request", listener);
+  },
   onMenuCommand: (callback) => {
     const listener = (_event, command) => callback(command);
     ipcRenderer.on("menu:command", listener);

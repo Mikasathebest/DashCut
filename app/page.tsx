@@ -12,6 +12,9 @@ import {
 } from "./editor/model";
 import { defaultSubtitleStyle, normalizeSubtitleStyle, retimeSubtitle, shiftSubtitles, SubtitleStyle } from "./editor/captions";
 import { CaptionStyleEditor, CaptionTimingBar } from "./editor/CaptionTools";
+import { applyAgentEdits, AgentContext, AgentOp, cleanCutCandidates, findSegments, getCaptions, getTranscript, serializeTimeline, buildAliases } from "./editor/agent";
+import { AgentMessage, AgentPanel } from "./editor/AgentPanel";
+import { agentSkills, agentSystemPrompt, agentToolSpecs, AgentSkill } from "./editor/agent-tools";
 import { CleanCutReview } from "./editor/CleanCutReview";
 import { Preview } from "./editor/Preview";
 import { TranscriptPanel } from "./editor/TranscriptPanel";
@@ -21,7 +24,7 @@ import { clampZoom, DropTarget, formatClock, Timeline, TimelineMode, TimelineSet
 type LeftTab = "media" | "transcript" | "subtitles";
 type MediaFilter = "all" | "video" | "image" | "audio";
 type RecognitionEngine = "cloud" | "local";
-type History = { past: Project[]; present: Project; future: Project[]; key: string; at: number };
+type History = { past: Project[]; present: Project; future: Project[]; key: string; at: number; revision: number };
 
 // Endpoint and model are remembered between sessions; the API key never is.
 const aiSettingsKey = "dashcut.ai-settings";
@@ -68,7 +71,7 @@ export default function Home() {
   const [recentProjects, setRecentProjects] = useState<RecentProject[]>([]);
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
   const [missingAssets, setMissingAssets] = useState<string[]>([]);
-  const [history, setHistory] = useState<History>(() => ({ past: [], present: createProject(), future: [], key: "", at: 0 }));
+  const [history, setHistory] = useState<History>(() => ({ past: [], present: createProject(), future: [], key: "", at: 0, revision: 1 }));
   const project = history.present;
   const [selection, setSelection] = useState<string[]>([]);
   const [current, setCurrent] = useState(0);
@@ -121,6 +124,10 @@ export default function Home() {
   const [selectedSubtitle, setSelectedSubtitle] = useState<number | null>(null);
   const [hotwords, setHotwords] = useState("");
   const [cleanCutSettings, setCleanCutSettings] = useState<CleanCutSettings>(defaultCleanCutSettings);
+  const [agentOpen, setAgentOpen] = useState(false);
+  const [agentMessages, setAgentMessages] = useState<AgentMessage[]>([]);
+  const [agentRunning, setAgentRunning] = useState(false);
+  const [agentConfig, setAgentConfig] = useState<AgentProviderConfig | null>(null);
   const [cleanCut, setCleanCut] = useState<{ clipIds?: string[]; scope: string; silences: CleanCutItem[] } | null>(null);
   const [autoTranslate, setAutoTranslate] = useState(true);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -148,17 +155,17 @@ export default function Home() {
       if (value === state.present) return state;
       const now = Date.now();
       // Continuous slider drags collapse into one undo step.
-      if (key && key === state.key && now - state.at < 1200) return { ...state, present: value, future: [], at: now };
-      return { past: [...state.past.slice(-99), state.present], present: value, future: [], key, at: now };
+      if (key && key === state.key && now - state.at < 1200) return { ...state, present: value, future: [], at: now, revision: state.revision + 1 };
+      return { past: [...state.past.slice(-99), state.present], present: value, future: [], key, at: now, revision: state.revision + 1 };
     });
   }, []);
 
   function undo() {
-    setHistory((state) => state.past.length ? { past: state.past.slice(0, -1), present: state.past.at(-1)!, future: [state.present, ...state.future], key: "", at: 0 } : state);
+    setHistory((state) => state.past.length ? { past: state.past.slice(0, -1), present: state.past.at(-1)!, future: [state.present, ...state.future], key: "", at: 0, revision: state.revision + 1 } : state);
   }
 
   function redo() {
-    setHistory((state) => state.future.length ? { past: [...state.past, state.present], present: state.future[0], future: state.future.slice(1), key: "", at: 0 } : state);
+    setHistory((state) => state.future.length ? { past: [...state.past, state.present], present: state.future[0], future: state.future.slice(1), key: "", at: 0, revision: state.revision + 1 } : state);
   }
 
   /* ------------------------------------------------------------ AI settings and caption progress */
@@ -630,33 +637,37 @@ export default function Home() {
     commit((state) => ({ ...state, subtitles }), key);
   }
 
-  async function generateSubtitles(verbatim = false) {
-    if (isGenerating) return;
-    if (recognitionEngine === "cloud" || autoTranslate) {
-      if (!window.dashCutDesktop) return setToast("云端字幕仅支持桌面版");
+  /** Runs recognition (and optional translation); resolves with the message shown to the user. */
+  async function generateSubtitles(verbatim = false, translate?: boolean): Promise<string> {
+    let outcome = "";
+    const notify = (message: string) => { outcome = message; notify(message); };
+    const withTranslation = translate ?? autoTranslate;
+    if (isGenerating) return "正在识别中，请稍候";
+    if (recognitionEngine === "cloud" || withTranslation) {
+      if (!window.dashCutDesktop) { notify("云端字幕仅支持桌面版"); return outcome; }
       if (!aiConfig.baseUrl.trim() || !aiConfig.apiKey.trim() || !aiConfig.model.trim()) {
-        return setToast(recognitionEngine === "cloud" ? "请先填写 API Base URL、API Key 并选择模型" : "请先填写 API 设置，或关闭自动翻译以离线识别");
+        { notify(recognitionEngine === "cloud" ? "请先填写 API Base URL、API Key 并选择模型" : "请先填写 API 设置，或关闭自动翻译以离线识别"); return outcome; }
       }
     }
     const sources = captionSources();
     if (recognitionEngine === "local") {
       if (!window.dashCutDesktop) {
-        setToast("本地识别仅支持桌面版");
+        notify("本地识别仅支持桌面版");
         setHardwareOpen(true);
-        return;
+        return outcome;
       }
       if (!hardware?.runtime?.ready) {
-        setToast("本地 AI 运行时不可用，请重新安装 DashCut 极剪");
+        notify("本地 AI 运行时不可用，请重新安装 DashCut 极剪");
         setHardwareOpen(true);
         void checkHardware();
-        return;
+        return outcome;
       }
       if (!localModels.find((model) => model.id === selectedModel)?.installed) {
-        setToast(`请先下载安装 ${selectedModel} 模型`);
+        notify(`请先下载安装 ${selectedModel} 模型`);
         setHardwareOpen(true);
-        return;
+        return outcome;
       }
-      if (!sources.length) return setToast("时间轴中没有含人声的视频或音频");
+      if (!sources.length) { notify("时间轴中没有含人声的视频或音频"); return outcome; }
       setIsGenerating(true);
       setCaptionProgress({ progress: 0, stage: "正在加载本地模型" });
       try {
@@ -673,26 +684,26 @@ export default function Home() {
         const generated = placeCaptions(sources, response.results, false);
         const transcripts = buildTranscripts(sources, response.results, "local");
         commit((state) => ({ ...state, subtitles: generated, transcripts: { ...state.transcripts, ...transcripts } }));
-        if (autoTranslate && generated.length) {
-          setToast("本地识别完成，正在生成中英译文…");
+        if (withTranslation && generated.length) {
+          notify("本地识别完成，正在生成中英译文…");
           setCaptionProgress({ progress: 0, stage: "正在翻译" });
           try {
             setSubtitles(await window.dashCutDesktop.translateSubtitles({ config: aiConfig, subtitles: generated }));
-            setToast(`双语字幕完成 · ${response.model} + ${aiConfig.model}（保留识别时间戳）`);
+            notify(`双语字幕完成 · ${response.model} + ${aiConfig.model}（保留识别时间戳）`);
           } catch (error) {
-            setToast(`已保留原语言字幕；翻译失败：${error instanceof Error ? error.message : "请重试"}`);
+            notify(`已保留原语言字幕；翻译失败：${error instanceof Error ? error.message : "请重试"}`);
           }
-        } else setToast(`本地识别完成 · ${response.model} / ${response.device}`);
+        } else notify(`本地识别完成 · ${response.model} / ${response.device}`);
       } catch (error) {
-        setToast(error instanceof Error ? error.message : "本地识别失败");
+        notify(error instanceof Error ? error.message : "本地识别失败");
       } finally {
         setIsGenerating(false);
         setCaptionProgress(null);
       }
-      return;
+      return outcome;
     }
-    if (!window.dashCutDesktop) return;
-    if (!sources.length) return setToast("时间轴中没有含人声的视频或音频");
+    if (!window.dashCutDesktop) return "仅支持桌面版";
+    if (!sources.length) { notify("时间轴中没有含人声的视频或音频"); return outcome; }
     setIsGenerating(true);
     setCaptionProgress({ progress: 0, stage: "正在提取音轨" });
     try {
@@ -700,15 +711,16 @@ export default function Home() {
       const transcripts = buildTranscripts(sources, response.results.map((result) => ({ ...result, segments: result.segments.map((segment) => ({ ...segment, text: segment.zh || segment.text })) })), "cloud");
       const generated = placeCaptions(sources, response.results, true);
       commit((state) => ({ ...state, subtitles: generated, transcripts: { ...state.transcripts, ...transcripts } }));
-      setToast(response.failedChunks
+      notify(response.failedChunks
         ? `云端字幕完成，但有 ${response.failedChunks}/${response.totalChunks} 段识别失败，可重试或改用本地识别`
         : "云端双语字幕完成，时间为模型估算；如整体偏早或偏晚，可用“时间偏移”一键校准");
     } catch (error) {
-      setToast(error instanceof Error ? error.message : "云端识别失败");
+      notify(error instanceof Error ? error.message : "云端识别失败");
     } finally {
       setIsGenerating(false);
       setCaptionProgress(null);
     }
+    return outcome;
   }
 
   async function refreshAiModels() {
@@ -911,6 +923,163 @@ export default function Home() {
     commit((state) => updateClip(state, primaryId, patch, options), `${primaryId}-${key}`);
   }, [commit, options, primaryId]);
 
+  /* ------------------------------------------------------------ assistant */
+
+  const planResolvers = useRef(new Map<string, (decision: { approved: boolean; feedback: string }) => void>());
+  const planApproved = useRef(false);
+  const editRevisions = useRef(new Map<string, number>());
+  const agentState = useRef({ history, assets, title: projectMeta.title, ratio, captionStyle: subtitleStyle as unknown as Record<string, unknown>, captionMode: subtitleMode, options, cleanCutSettings, generateSubtitles });
+  useEffect(() => {
+    agentState.current = { history, assets, title: projectMeta.title, ratio, captionStyle: subtitleStyle as unknown as Record<string, unknown>, captionMode: subtitleMode, options, cleanCutSettings, generateSubtitles };
+  });
+
+  // Undo/redo across an assistant edit restores the canvas and caption settings captured with it.
+  const view = project.view;
+  useEffect(() => {
+    if (!view) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setRatio(view.ratio);
+    setSubtitleStyle(normalizeSubtitleStyle(view.captionStyle as Partial<SubtitleStyle>));
+    setSubtitleMode(view.captionMode);
+  }, [view]);
+
+  function agentContext(): AgentContext {
+    const state = agentState.current;
+    return { project: state.history.present, assets: state.assets, revision: state.history.revision, title: state.title, ratio: state.ratio, captionStyle: state.captionStyle, captionMode: state.captionMode, options: state.options };
+  }
+
+  const pushAgent = (message: AgentMessage) => setAgentMessages((items) => [...items, message]);
+
+  async function runAgentTool(name: string, args: Record<string, unknown>): Promise<unknown> {
+    const context = agentContext();
+    switch (name) {
+      case "get_timeline": return { revision: context.revision, view: serializeTimeline(context) };
+      case "get_captions": return getCaptions(context, Number(args.from) || 1, Number(args.to) || undefined);
+      case "get_caption_style": return context.captionStyle;
+      case "get_transcript": return getTranscript(context, { start: args.start as number | undefined, end: args.end as number | undefined });
+      case "find_segments": return findSegments(context, String(args.query ?? ""));
+      case "clean_cut_candidates": return cleanCutCandidates(context, Array.isArray(args.clips) ? args.clips as string[] : undefined, agentState.current.cleanCutSettings);
+      case "analyze_media": {
+        const aliases = buildAliases(context.project, context.assets);
+        const asset = context.assets.find((item) => item.id === aliases.assetId.get(String(args.asset)));
+        if (!asset) throw new Error(`找不到素材 ${String(args.asset)}`);
+        const range = { in: (Number(args.start) || 0) / 1000, out: args.end === undefined ? asset.duration : Number(args.end) / 1000 };
+        if (args.analysis === "loudness") {
+          if (!asset.peaks.length) return { error: "该素材没有可用的音频波形" };
+          const perSecond = Array.from({ length: Math.ceil(range.out - range.in) }, (_, second) => {
+            const from = Math.floor((range.in + second) * asset.peaksPerSecond);
+            return Number(Math.max(0, ...asset.peaks.slice(from, from + asset.peaksPerSecond)).toFixed(2));
+          });
+          return { startMs: Math.round(range.in * 1000), peakPerSecond: perSecond.slice(0, 900) };
+        }
+        if (!window.dashCutDesktop || !asset.sourcePath) throw new Error("素材分析仅支持桌面版的本地文件");
+        if (args.analysis === "scenes") return { cutsMs: (await window.dashCutDesktop.detectScenes(asset.sourcePath, range)).map((time) => Math.round(time * 1000)) };
+        const { silences } = await window.dashCutDesktop.detectSpeechSegments(asset.sourcePath, range);
+        return { silencesMs: silences.map((item) => ({ start: Math.round(item.start * 1000), end: Math.round(item.end * 1000) })) };
+      }
+      case "propose_plan": {
+        const id = uid("plan");
+        const steps = Array.isArray(args.steps) ? args.steps.map(String) : [];
+        pushAgent({ id, kind: "plan", summary: String(args.summary ?? ""), steps, decision: "pending" });
+        const decision = await new Promise<{ approved: boolean; feedback: string }>((resolve) => planResolvers.current.set(id, resolve));
+        planApproved.current = decision.approved;
+        return decision.approved ? { approved: true } : { approved: false, feedback: decision.feedback || "用户希望调整方案" };
+      }
+      case "apply_edits": {
+        const dryRun = args.dryRun === true;
+        if (!dryRun && !planApproved.current) return { ok: false, issues: [{ index: -1, op: "", message: "需要先调用 propose_plan 并获得用户确认" }] };
+        const result = applyAgentEdits(context, { baseRevision: Number(args.baseRevision), ops: (Array.isArray(args.ops) ? args.ops : []) as AgentOp[] });
+        if (!result.ok) return result;
+        if (dryRun) return { ok: true, dryRun: true, changes: result.changes };
+        const before = { ratio: context.ratio, captionStyle: context.captionStyle, captionMode: context.captionMode };
+        const after = { ratio: result.ratio, captionStyle: result.captionStyle ?? context.captionStyle, captionMode: result.captionMode };
+        const revision = context.revision + 1;
+        const nextProject = { ...result.project, view: after };
+        // One history entry; the previous state records the settings it had so undo restores them too.
+        setHistory((state) => ({ past: [...state.past.slice(-99), { ...state.present, view: before }], present: nextProject, future: [], key: "", at: Date.now(), revision: state.revision + 1 }));
+        agentState.current = { ...agentState.current, history: { ...agentState.current.history, present: nextProject, revision } };
+        const id = uid("edits");
+        editRevisions.current.set(id, revision);
+        pushAgent({ id, kind: "edits", changes: result.changes, revision, undone: false });
+        return { ok: true, revision, changes: result.changes };
+      }
+      case "generate_captions": {
+        if (!planApproved.current) return { error: "需要先调用 propose_plan 并获得用户确认" };
+        const message = await agentState.current.generateSubtitles(false, args.translate === true);
+        await new Promise((resolve) => window.setTimeout(resolve, 100));
+        return { message, captions: agentState.current.history.present.subtitles.length, revision: agentState.current.history.revision };
+      }
+      default: throw new Error(`未知工具 ${name}`);
+    }
+  }
+
+  const agentToolRef = useRef(runAgentTool);
+  useEffect(() => { agentToolRef.current = runAgentTool; });
+
+  useEffect(() => {
+    const desktop = window.dashCutDesktop;
+    if (!desktop?.onAgentToolRequest) return;
+    const offTool = desktop.onAgentToolRequest(({ requestId, name, args }) => {
+      void agentToolRef.current(name, args ?? {})
+        .then((result) => desktop.agentToolResponse({ requestId, result }))
+        .catch((error) => desktop.agentToolResponse({ requestId, error: error instanceof Error ? error.message : String(error) }));
+    });
+    const offEvent = desktop.onAgentEvent((event) => {
+      if (event.type === "start") return setAgentRunning(true);
+      if (event.type === "end") {
+        setAgentRunning(false);
+        for (const resolve of planResolvers.current.values()) resolve({ approved: false, feedback: "已停止" });
+        planResolvers.current.clear();
+        return;
+      }
+      if (event.type === "assistant") return pushAgent({ id: uid("msg"), kind: "assistant", text: event.text });
+      if (event.type === "error") return pushAgent({ id: uid("msg"), kind: "error", text: event.message });
+      if (event.type === "stopped") return pushAgent({ id: uid("msg"), kind: "status", text: "已停止。已经应用的修改可以用撤销恢复。" });
+      if (event.type === "tool-call" && event.name !== "propose_plan" && event.name !== "apply_edits") {
+        return pushAgent({ id: `tool-${event.id}`, kind: "tool", name: event.name, status: "running", detail: "" });
+      }
+      if (event.type === "tool-result") {
+        const result = event.result as { error?: string; ok?: boolean; issues?: Array<{ message: string }> } | null;
+        if (event.name === "apply_edits" && result?.ok === false) return pushAgent({ id: uid("msg"), kind: "status", text: `修改未通过校验，助手正在调整：${result.issues?.map((issue) => issue.message).slice(0, 2).join("；")}` });
+        setAgentMessages((items) => items.map((item) => item.id === `tool-${event.id}` && item.kind === "tool" ? { ...item, status: result?.error ? "failed" : "done", detail: result?.error ?? "" } : item));
+      }
+    });
+    return () => { offTool(); offEvent(); };
+  }, []);
+
+  async function openAgent() {
+    setAgentOpen(true);
+    if (window.dashCutDesktop && !agentConfig) setAgentConfig(await window.dashCutDesktop.agentConfig().catch(() => null));
+  }
+
+  function sendToAgent(text: string, skill?: AgentSkill) {
+    if (!window.dashCutDesktop) return setToast("极剪助手仅支持桌面版");
+    planApproved.current = false;
+    pushAgent({ id: uid("msg"), kind: "user", text });
+    setAgentRunning(true);
+    window.dashCutDesktop.agentSend({ message: text, system: agentSystemPrompt(skill), tools: agentToolSpecs }).catch((error) => {
+      setAgentRunning(false);
+      pushAgent({ id: uid("msg"), kind: "error", text: error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, "") : "发送失败" });
+    });
+  }
+
+  function decidePlan(id: string, approved: boolean, feedback: string) {
+    setAgentMessages((items) => items.map((item) => item.id === id && item.kind === "plan" ? { ...item, decision: approved ? "approved" : "rejected", feedback } : item));
+    planResolvers.current.get(id)?.({ approved, feedback });
+    planResolvers.current.delete(id);
+  }
+
+  function undoAgentEdit(id: string) {
+    if (editRevisions.current.get(id) !== history.revision) return setToast("这次修改之后还有其他编辑，请用 ⌘Z 逐步撤销");
+    undo();
+    setAgentMessages((items) => items.map((item) => item.id === id && item.kind === "edits" ? { ...item, undone: true } : item));
+  }
+
+  async function resetAgent() {
+    await window.dashCutDesktop?.agentReset();
+    setAgentMessages([]);
+  }
+
   /* ------------------------------------------------------------ project files */
 
   function editorState(): EditorState {
@@ -983,7 +1152,7 @@ export default function Home() {
     setPlaying(false);
     for (const asset of assets) if (asset.url.startsWith("blob:")) URL.revokeObjectURL(asset.url);
     setAssets(state.assets);
-    setHistory({ past: [], present: state.project, future: [], key: "", at: 0 });
+    setHistory((current) => ({ past: [], present: state.project, future: [], key: "", at: 0, revision: current.revision + 1 }));
     setProjectMeta({ id: state.id, title: state.title, createdAt: state.createdAt });
     setProjectPath(path);
     setRatio(state.ratio);
@@ -1094,6 +1263,7 @@ export default function Home() {
       if (command === "save-as") return void saveProject(true);
       if (command === "import") return fileInputRef.current?.click();
       if (command === "export") return setExportOpen(true);
+      if (command === "agent") return agentOpen ? setAgentOpen(false) : void openAgent();
       if (command === "autosave") return void autosaveNow();
       if (command === "save-and-close") void saveProject(false).then((saved) => { if (saved) void window.dashCutDesktop?.closeReady(); });
     };
@@ -1174,7 +1344,7 @@ export default function Home() {
         </div>
         <div><input className="project-name" aria-label="项目名称" value={projectMeta.title} onChange={(event) => setProjectMeta((meta) => ({ ...meta, title: event.target.value }))} onBlur={(event) => { if (!event.target.value.trim()) setProjectMeta((meta) => ({ ...meta, title: "未命名项目" })); }} /><span>{dirty ? "未保存" : projectPath ? "已保存" : "未保存到磁盘"} · {formatClock(duration, false)} · {project.clips.length} 个片段</span></div>
       </div>
-      <div className="top-actions"><button className="ghost hide-mobile" onClick={() => setAboutOpen(true)}>关于与许可</button><button className="export-button" onClick={() => setExportOpen(true)}>导出视频 <span>↗</span></button></div>
+      <div className="top-actions"><button className="ghost hide-mobile" onClick={() => setAboutOpen(true)}>关于与许可</button><button className={`agent-button${agentOpen ? " active" : ""}`} title="极剪助手（⌘J）" onClick={() => agentOpen ? setAgentOpen(false) : void openAgent()}>✦ 极剪助手</button><button className="export-button" onClick={() => setExportOpen(true)}>导出视频 <span>↗</span></button></div>
     </header>
 
     <section className="workspace">
@@ -1189,7 +1359,10 @@ export default function Home() {
         <div className="player-controls"><span>{formatClock(current)} <i>/ {formatClock(duration)}</i></span><div><button title="回到开头" onClick={() => seek(0)}><Icon name="prev" size={14} /></button><button data-play-toggle className="play" onClick={togglePlay} title="播放 / 暂停（空格）"><Icon name={playing ? "pause" : "play"} size={14} /></button><button title="跳到结尾" onClick={() => seek(duration)}><Icon name="next" size={14} /></button></div><div><button title={muted ? "取消静音" : "静音预览"} onClick={() => setMuted(!muted)}><Icon name={muted ? "mute" : "volume"} size={15} /></button><button title="全屏预览" onClick={() => void document.querySelector(".video-frame")?.requestFullscreen()}><Icon name="fullscreen" size={14} /></button></div></div>
       </section>
 
-      <Inspector clip={primaryClip} asset={primaryAsset} tab={inspectorTab} onTab={setInspectorTab} onChange={changeClip} onCrop={() => runAction("crop")} />
+      {agentOpen
+        ? <AgentPanel messages={agentMessages} running={agentRunning} config={agentConfig} skills={agentSkills} onSend={sendToAgent} onStop={() => void window.dashCutDesktop?.agentStop()} onReset={() => void resetAgent()} onPlan={decidePlan} onUndo={undoAgentEdit}
+            onSaveConfig={async (config) => { if (!window.dashCutDesktop) return; try { setAgentConfig(await window.dashCutDesktop.saveAgentConfig(config)); setToast("助手设置已保存"); } catch (error) { setToast(error instanceof Error ? error.message : "保存失败"); } }} onClose={() => setAgentOpen(false)} />
+        : <Inspector clip={primaryClip} asset={primaryAsset} tab={inspectorTab} onTab={setInspectorTab} onChange={changeClip} onCrop={() => runAction("crop")} />}
     </section>
 
     <section className="timeline-area">

@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
-const { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, protocol, shell, systemPreferences } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, protocol, safeStorage, shell, systemPreferences } = require("electron");
 const { existsSync } = require("node:fs");
 const { mkdir, writeFile } = require("node:fs/promises");
 const path = require("node:path");
@@ -11,6 +11,7 @@ const { exportVideo } = require("./video-export.cjs");
 const { exportComposition } = require("./composition-export.cjs");
 const { detectScenes, detectSpeechSegments, extractWaveform } = require("./smart-edit.cjs");
 const { handleMediaScheme, registerMediaScheme } = require("./media-protocol.cjs");
+const { createAgentHost } = require("./agent-host.cjs");
 const { createAutosave, createRecentList, findSiblings, loadProject, saveProject } = require("./project-store.cjs");
 
 registerMediaScheme(protocol);
@@ -179,6 +180,8 @@ function buildMenu() {
       { type: "separator" },
       { label: "导入素材…", accelerator: "CmdOrCtrl+I", click: () => sendCommand("import") },
       { label: "导出视频…", accelerator: "CmdOrCtrl+E", click: () => sendCommand("export") },
+      { type: "separator" },
+      { label: "极剪助手", accelerator: "CmdOrCtrl+J", click: () => sendCommand("agent") },
       ...(isMac ? [] : [{ type: "separator" }, { role: "quit" }]),
     ] },
     // Undo/redo route through the renderer so text fields and the timeline each get their own history.
@@ -235,6 +238,13 @@ async function createWindow() {
 
 app.whenReady().then(() => {
   media = handleMediaScheme(protocol);
+  createAgentHost({
+    ipcMain,
+    safeStorage,
+    configFile: path.join(app.getPath("userData"), "agent-config.json"),
+    keyFile: path.join(app.getPath("userData"), "agent-keys.json"),
+    getWindow: () => mainWindow,
+  });
   buildMenu();
   return createWindow();
 }).catch((error) => {
