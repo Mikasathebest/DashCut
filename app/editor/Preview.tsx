@@ -41,7 +41,40 @@ type LayerProps = { clip: Clip; asset: Asset; time: number; rate: number; muted:
 // Routing media through Web Audio lets preview volume exceed 100% and approximates the export's audio effects.
 type AudioChain = { gain: GainNode; highpass: BiquadFilterNode; lowpass: BiquadFilterNode; compressor: DynamicsCompressorNode };
 let audioContext: AudioContext | null = null;
+let master: { input: GainNode; analyser: AnalyserNode } | null = null;
 const chains = new WeakMap<HTMLMediaElement, AudioChain | null>();
+
+/** Shared output bus; a K-weighted branch feeds the loudness meter (approximating ITU-R BS.1770). */
+function masterBus(context: AudioContext) {
+  if (master) return master;
+  const input = context.createGain();
+  input.connect(context.destination);
+  const shelf = context.createBiquadFilter();
+  shelf.type = "highshelf";
+  shelf.frequency.value = 1500;
+  shelf.gain.value = 4;
+  const highpass = context.createBiquadFilter();
+  highpass.type = "highpass";
+  highpass.frequency.value = 38;
+  const analyser = context.createAnalyser();
+  analyser.fftSize = 32768;
+  input.connect(shelf).connect(highpass).connect(analyser);
+  master = { input, analyser };
+  return master;
+}
+
+/** Momentary loudness (LUFS over the analyser window) of everything the preview is playing, or null. */
+export function readLoudness() {
+  if (!master || !audioContext || audioContext.state !== "running") return null;
+  const span = Math.min(master.analyser.fftSize, Math.round(audioContext.sampleRate * 0.4));
+  const samples = new Float32Array(master.analyser.fftSize);
+  master.analyser.getFloatTimeDomainData(samples);
+  let sum = 0;
+  for (let index = samples.length - span; index < samples.length; index += 1) sum += samples[index] * samples[index];
+  const meanSquare = sum / span;
+  // Mono analyser on a stereo mix: +3 dB approximates the two-channel sum.
+  return meanSquare > 1e-10 ? -0.691 + 10 * Math.log10(meanSquare) + 3.01 : -70;
+}
 
 function audioChain(element: HTMLMediaElement) {
   if (chains.has(element)) return chains.get(element)!;
@@ -54,7 +87,7 @@ function audioChain(element: HTMLMediaElement) {
     lowpass.type = "lowpass";
     const compressor = audioContext.createDynamicsCompressor();
     const gain = audioContext.createGain();
-    source.connect(highpass).connect(lowpass).connect(compressor).connect(gain).connect(audioContext.destination);
+    source.connect(highpass).connect(lowpass).connect(compressor).connect(gain).connect(masterBus(audioContext).input);
     const chain = { gain, highpass, lowpass, compressor };
     chains.set(element, chain);
     return chain;

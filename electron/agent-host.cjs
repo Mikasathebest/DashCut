@@ -10,7 +10,7 @@ const { atomicWrite } = require("./project-store.cjs");
 
 const toolTimeoutMs = 10 * 60_000; // plan approval waits for the user
 
-function createAgentHost({ ipcMain, safeStorage, configFile, keyFile, getWindow }) {
+function createAgentHost({ ipcMain, safeStorage, configFile, keyFile, getWindow, fetch }) {
   const keys = createKeyStore({ file: keyFile, safeStorage });
   const pending = new Map();
   let history = [];
@@ -81,7 +81,7 @@ function createAgentHost({ ipcMain, safeStorage, configFile, keyFile, getWindow 
     const config = await readConfig();
     const apiKey = keys.get(config.kind);
     if (!apiKey) throw new Error("请先在助手设置中填写 API Key");
-    const provider = createProvider({ ...config, baseUrl: config.baseUrl || undefined, model: config.model || undefined, apiKey });
+    const provider = createProvider({ ...config, baseUrl: config.baseUrl || undefined, model: config.model || undefined, apiKey, fetch });
     controller = new AbortController();
     const runId = randomUUID();
     send("agent:event", { runId, type: "start" });

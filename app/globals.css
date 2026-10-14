@@ -497,3 +497,34 @@ button { cursor: pointer; }
 .clip-transition { position: absolute; top: 50%; z-index: 4; width: 18px; height: 18px; margin: -9px 0 0 -9px; border: 1px solid #a7b8ff; border-radius: 5px; background: #2f3d73; color: white; font-size: 10px; line-height: 1; padding: 0; }
 .timeline-marquee { position: fixed; z-index: 30; border: 1px solid #8aa5ff; background: rgba(109, 141, 255, .12); pointer-events: none; }
 .shuttle-badge { margin-left: 8px; padding: 1px 5px; border-radius: 4px; background: #33427a; color: #dbe3ff; font-style: normal; }
+.stage-actions { display: flex; align-items: center; gap: 8px; }
+.reframe-button { border: 1px solid #3f4a78; border-radius: 7px; background: #1a2036; color: #b8c6ff; padding: 6px 10px; font-size: 10px; }
+.reframe-modal .about-content { display: flex; flex-direction: column; gap: 12px; }
+.export-presets { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+.export-presets button { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; padding: 9px; border: 1px solid #303642; border-radius: 9px; background: #171b23; text-align: left; }
+.export-presets button.active { border-color: #7793ff; background: #1c2230; }
+.export-presets b { font-size: 10px; color: #e2e6ee; }
+.export-presets small { font-size: 8px; color: #6d7583; }
+.health-button { border: 1px solid #363e4c; border-radius: 8px; padding: 8px; background: transparent; color: #a0a8b6; font-size: 10px; }
+.health-modal { width: min(640px, 95vw); }
+.health-item { display: grid; grid-template-columns: 64px 1fr auto; gap: 10px; align-items: center; padding: 9px 10px; border-radius: 8px; background: #171b23; margin-bottom: 6px; }
+.health-item div:nth-child(2) { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.health-item b { font-size: 11px; }
+.health-item small { color: #8d95a4; font-size: 9px; line-height: 1.5; }
+.health-badge { justify-self: start; padding: 2px 6px; border-radius: 4px; font-size: 8px; background: #263046; color: #9db1ff; }
+.health-item.error .health-badge { background: #4a1e26; color: #ff9aa6; }
+.health-item.warning .health-badge { background: #4a3a17; color: #f5cf73; }
+.health-actions { display: flex; gap: 4px; }
+.health-actions button { border: 1px solid #363e4c; border-radius: 6px; background: transparent; color: #b8c0cd; font-size: 9px; padding: 4px 8px; }
+.health-actions button.fix { border-color: #4f66b8; color: #b8c6ff; }
+.health-running { display: flex; align-items: center; gap: 8px; color: #9aa2b1; font-size: 11px; }
+.health-running i { width: 8px; height: 8px; border-radius: 50%; background: #8aa5ff; animation: fade 1s infinite alternate; }
+.health-ok { color: #67d3a1; font-size: 12px; }
+.health-summary { color: #c6ccd6; font-size: 11px; margin: 0 0 10px; }
+.loudness-meter { position: relative; width: 120px; height: 16px; border-radius: 4px; background: #171b23; border: 1px solid #2a303c; overflow: hidden; margin-right: 6px; }
+.loudness-meter i { position: absolute; left: 0; top: 0; bottom: 0; background: #3b4a7a; transition: width .1s; }
+.loudness-meter.good i { background: #2f7a5c; }
+.loudness-meter.loud i { background: #9a3b48; }
+.loudness-meter.quiet i { background: #6b5a2a; }
+.loudness-meter em { position: absolute; top: 0; bottom: 0; width: 2px; background: #ffcc45; }
+.loudness-meter span { position: relative; display: block; text-align: center; font: 9px/16px monospace; color: #dfe3ea; }

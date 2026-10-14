@@ -106,6 +106,13 @@ Windows x64 releases produce an unsigned one-click `.exe` without credentials; W
 3. Changes are applied immediately to every caption and reflected in the preview. Use **Restore defaults** to reset the full style.
 4. Choose the Bilibili or YouTube preset, select 30 or 60 FPS, and export after reviewing the timeline.
 
+### Publish: presets, loudness, smart reframe and pre-publish check
+
+- **Export presets:** Bilibili 16:9 1080p60, YouTube 4K (HEVC), Shorts/Douyin 9:16, audio only (M4A) and GIF. You can also pick the format (MP4, MOV, M4A, WAV, GIF), codec (H.264 or the smaller HEVC), resolution and frame rate yourself.
+- **Loudness:** export can normalise the mix to −14 LUFS (YouTube/Bilibili), −16 (podcast/mobile) or −23 (EBU R128). It measures first, then applies loudnorm. A live LUFS meter beside the player shows preview loudness against the target.
+- **Smart reframe (✦ 智能转竖屏):** detects faces locally (MediaPipe BlazeFace, downloaded once, about 0.2 MB) and turns 16:9 footage into a 9:16 cover-fit framing with smooth horizontal keyframes that follow the speaker. A tracking-speed setting trades calm pans for tighter following, and the keyframes stay editable.
+- **Pre-publish check:** renders the timeline once without writing a file. It reports loudness and true peak, black frames, long silences, captions that are too long, too fast, too brief or overlapping, and missing media, each with a jump or a one-click fix.
+
 ## 4. Contributing and merging code
 
 1. Fork the repository and create a focused branch such as `feat/subtitle-translation` or `fix/timeline-split`.

@@ -1,14 +1,14 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
-const { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, protocol, safeStorage, shell, systemPreferences } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, net, protocol, safeStorage, shell, systemPreferences } = require("electron");
 const { existsSync } = require("node:fs");
-const { mkdir, rm, writeFile } = require("node:fs/promises");
+const { mkdir, readFile, rename, rm, writeFile } = require("node:fs/promises");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 const { getHardwareProfile } = require("./hardware.cjs");
 const { transcribeLocal } = require("./local-transcription.cjs");
 const { getModels, getRuntimeStatus, installModel, removeModel } = require("./model-manager.cjs");
 const { exportVideo } = require("./video-export.cjs");
-const { exportComposition } = require("./composition-export.cjs");
+const { analyzeComposition, exportComposition } = require("./composition-export.cjs");
 const { detectScenes, detectSpeechSegments, extractWaveform } = require("./smart-edit.cjs");
 const { handleMediaScheme, registerMediaScheme } = require("./media-protocol.cjs");
 const { createAgentHost } = require("./agent-host.cjs");
@@ -68,10 +68,12 @@ ipcMain.handle("transcription:local", (event, request) => {
   const options = localAiOptions();
   return transcribeLocal(request, { ...options, getRuntimeStatus: () => getRuntimeStatus(options), onProgress: captionProgress(event) });
 });
-ipcMain.handle("ai:models", (_event, config) => listModels(config));
-ipcMain.handle("ai:translate", (event, request) => translateSubtitles(request, { onProgress: captionProgress(event) }));
+// Network calls go through Chromium (net.fetch) so system proxies and certificates apply.
+const proxyAwareFetch = (...args) => net.fetch(...args);
+ipcMain.handle("ai:models", (_event, config) => listModels(config, { fetchImpl: proxyAwareFetch }));
+ipcMain.handle("ai:translate", (event, request) => translateSubtitles(request, { onProgress: captionProgress(event), fetchImpl: proxyAwareFetch }));
 ipcMain.handle("ai:transcribe", (event, request) => transcribeCloud(request, {
-  tempPath: app.getPath("temp"), ffmpegPath: mediaRuntimePath(), onProgress: captionProgress(event),
+  tempPath: app.getPath("temp"), ffmpegPath: mediaRuntimePath(), onProgress: captionProgress(event), fetchImpl: proxyAwareFetch,
 }));
 ipcMain.handle("export:video", async (event, request) => {
   const result = await dialog.showSaveDialog({
@@ -91,10 +93,12 @@ ipcMain.handle("export:video", async (event, request) => {
 });
 ipcMain.handle("export:composition", async (event, request) => {
   // Automated end-to-end runs pass the destination instead of driving the native dialog.
+  const format = ["mp4", "mov", "m4a", "wav", "gif"].includes(request?.output?.format) ? request.output.format : "mp4";
+  const kinds = { mp4: "MP4 视频", mov: "QuickTime 视频", m4a: "M4A 音频", wav: "WAV 音频", gif: "GIF 动图" };
   const result = process.env.DASHCUT_EXPORT_PATH ? { canceled: false, filePath: process.env.DASHCUT_EXPORT_PATH } : await dialog.showSaveDialog({
-    title: "导出视频",
-    defaultPath: "DashCut-export.mp4",
-    filters: [{ name: "MP4 Video", extensions: ["mp4"] }],
+    title: "导出",
+    defaultPath: `DashCut-export.${format}`,
+    filters: [{ name: kinds[format], extensions: [format] }],
   });
   if (result.canceled || !result.filePath) return { canceled: true };
   return exportComposition(request, {
@@ -129,6 +133,31 @@ ipcMain.handle("export:write-layer", async (_event, bytes) => {
   return target;
 });
 app.whenReady().then(() => rm(layerDir(), { recursive: true, force: true })).catch(() => undefined);
+// Open face-detection model (MediaPipe BlazeFace short range, Apache-2.0), downloaded on first use of smart reframe.
+const faceModelUrl = "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite";
+ipcMain.handle("reframe:model", async () => {
+  const target = path.join(app.getPath("userData"), "models", "face", "blaze_face_short_range.tflite");
+  if (!existsSync(target)) {
+    // Chromium's network stack honours system proxies, unlike Node's fetch.
+    const response = await net.fetch(faceModelUrl);
+    if (!response.ok) throw new Error(`人脸检测模型下载失败（HTTP ${response.status}）`);
+    const bytes = Buffer.from(await response.arrayBuffer());
+    if (bytes.length < 100_000) throw new Error("人脸检测模型下载不完整");
+    await mkdir(path.dirname(target), { recursive: true });
+    await writeFile(`${target}.tmp`, bytes);
+    await rename(`${target}.tmp`, target);
+  }
+  const data = await readFile(target);
+  return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+});
+ipcMain.handle("export:analyze", (event, request) => analyzeComposition(request, {
+  tempPath: app.getPath("temp"),
+  ffmpegPath: mediaRuntimePath(),
+  platform: process.platform,
+  prepareStill: prepareStillImage,
+  onProgress: (progress) => event.sender.send("export:progress", progress),
+}));
+ipcMain.handle("media:exists", (_event, paths) => (Array.isArray(paths) ? paths : []).map((item) => typeof item === "string" && path.isAbsolute(item) && existsSync(item)));
 ipcMain.handle("media:register", (_event, paths) => media.allow(Array.isArray(paths) ? paths : []));
 ipcMain.handle("project:save", async (_event, { document, projectPath, saveAs }) => {
   let target = projectPath;
@@ -258,6 +287,7 @@ app.whenReady().then(() => {
     configFile: path.join(app.getPath("userData"), "agent-config.json"),
     keyFile: path.join(app.getPath("userData"), "agent-keys.json"),
     getWindow: () => mainWindow,
+    fetch: proxyAwareFetch,
   });
   buildMenu();
   return createWindow();

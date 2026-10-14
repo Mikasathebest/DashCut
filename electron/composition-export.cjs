@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 const { spawn } = require("node:child_process");
 const { mkdtemp, rm, writeFile } = require("node:fs/promises");
+const { tmpdir } = require("node:os");
 const path = require("node:path");
 const { createAss, createSrt, resolveFfmpegExecutable, videoEncoderArgs } = require("./video-export.cjs");
 
@@ -390,33 +391,42 @@ function audioClipChain(clip, inputLabel, outLabel, options = {}) {
  * Pure builder: returns FFmpeg input args, the filter_complex graph and output map labels.
  * `sources` optionally maps visual index → replacement path (e.g. prepared JPEG stills);
  * `silentVisuals` is a Set of visual indices whose file turned out to have no audio stream.
+ * `fps` overrides the request frame rate (GIF/analysis); `audioOnly` skips the picture entirely
+ * (only audio inputs are added), `videoOnly` drops all audio (GIF); `videoTail` replaces the final video filters and `audioFilters`
+ * are appended to the final mix (loudnorm, meters).
  */
 function buildCompositionGraph(request, options = {}) {
   const W = even(num(request.width, 1920));
   const H = even(num(request.height, 1080));
-  const fps = request.fps === 60 ? 60 : 30;
+  const fps = options.fps ? clamp(num(options.fps, 30), 1, 60) : request.fps === 60 ? 60 : 30;
   const duration = Math.max(0.1, num(request.duration, 0));
   const sources = options.sources || {};
   const silentVisuals = options.silentVisuals || new Set();
+  const audioOnly = Boolean(options.audioOnly);
+  const videoOnly = !audioOnly && Boolean(options.videoOnly);
   const settings = { width: W, height: H, fps };
   const inputs = [];
   const chains = [];
   const audioLabels = [];
   let inputIndex = 0;
 
-  chains.push(`color=c=black:s=${W}x${H}:r=${fps}:d=${f(duration)},format=yuv420p,setsar=1[base0]`);
+  if (!audioOnly) chains.push(`color=c=black:s=${W}x${H}:r=${fps}:d=${f(duration)},format=yuv420p,setsar=1[base0]`);
   let current = "base0";
   const visuals = (Array.isArray(request.visuals) ? request.visuals : []).filter((visual) => clipDuration(visual) > 0 && num(visual.start) < duration);
   visuals.forEach((visual, index) => {
+    const settingsAudio = visual.audio || {};
+    const hasAudio = !videoOnly && visual.kind === "video" && visual.hasAudio && !settingsAudio.muted && !isFrozen(visual) && !silentVisuals.has(index);
+    if (audioOnly && !hasAudio) return;
     const sourcePath = sources[index] || visual.path;
     inputs.push(...visualInputArgs(visual, fps, sourcePath));
-    const layer = visualLayerChain(visual, index, `${inputIndex}:v:0`, settings);
-    chains.push(layer.chain);
-    const next = `base${index + 1}`;
-    chains.push(`[${current}][${layer.layerLabel}]${layer.overlay}[${next}]`);
-    current = next;
-    const settingsAudio = visual.audio || {};
-    if (visual.kind === "video" && visual.hasAudio && !settingsAudio.muted && !isFrozen(visual) && !silentVisuals.has(index)) {
+    if (!audioOnly) {
+      const layer = visualLayerChain(visual, index, `${inputIndex}:v:0`, settings);
+      chains.push(layer.chain);
+      const next = `base${index + 1}`;
+      chains.push(`[${current}][${layer.layerLabel}]${layer.overlay}[${next}]`);
+      current = next;
+    }
+    if (hasAudio) {
       const label = `va${index}`;
       chains.push(audioClipChain(visual, `${inputIndex}:a:0`, label, { reverse: Boolean(visual.reverse) }));
       audioLabels.push(label);
@@ -424,7 +434,7 @@ function buildCompositionGraph(request, options = {}) {
     inputIndex += 1;
   });
 
-  const audios = (Array.isArray(request.audios) ? request.audios : []).filter((clip) => clipDuration(clip, "audio") > 0 && num(clip.start) < duration && !clip.audio?.muted);
+  const audios = videoOnly ? [] : (Array.isArray(request.audios) ? request.audios : []).filter((clip) => clipDuration(clip, "audio") > 0 && num(clip.start) < duration && !clip.audio?.muted);
   audios.forEach((clip, index) => {
     inputs.push("-ss", f(Math.max(0, num(clip.in))), "-t", f(Math.max(0, num(clip.out) - num(clip.in))), "-i", clip.path);
     const label = `aa${index}`;
@@ -433,18 +443,23 @@ function buildCompositionGraph(request, options = {}) {
     inputIndex += 1;
   });
 
-  // JPEG stills tag frames as full range; the canvas is limited range, so retag the output for players and uploads.
-  if (options.assPath) chains.push(`[${current}]ass='${escapeFilterPath(options.assPath)}',format=yuv420p,setparams=range=tv[vout]`);
-  else chains.push(`[${current}]format=yuv420p,setparams=range=tv[vout]`);
-
-  if (audioLabels.length) {
-    const mixed = audioLabels.length === 1 ? `[${audioLabels[0]}]anull` : `${audioLabels.map((label) => `[${label}]`).join("")}amix=inputs=${audioLabels.length}:duration=longest:normalize=0:dropout_transition=0`;
-    chains.push(`${mixed},apad=whole_dur=${f(duration)},atrim=duration=${f(duration)},aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo[aout]`);
-  } else {
-    chains.push(`anullsrc=channel_layout=stereo:sample_rate=48000,atrim=duration=${f(duration)}[aout]`);
+  if (!audioOnly) {
+    // JPEG stills tag frames as full range; the canvas is limited range, so retag the output for players and uploads.
+    const ass = options.assPath ? `ass='${escapeFilterPath(options.assPath)}',` : "";
+    chains.push(`[${current}]${ass}${options.videoTail || "format=yuv420p,setparams=range=tv"}[vout]`);
   }
 
-  return { inputs, filterGraph: chains.join(";\n"), videoLabel: "vout", audioLabel: "aout", width: W, height: H, fps, duration };
+  const audioTail = Array.isArray(options.audioFilters) && options.audioFilters.length ? `,${options.audioFilters.join(",")}` : "";
+  if (videoOnly) {
+    // GIF: no audio inputs and no mix, so no unmapped output label.
+  } else if (audioLabels.length) {
+    const mixed = audioLabels.length === 1 ? `[${audioLabels[0]}]anull` : `${audioLabels.map((label) => `[${label}]`).join("")}amix=inputs=${audioLabels.length}:duration=longest:normalize=0:dropout_transition=0`;
+    chains.push(`${mixed},apad=whole_dur=${f(duration)},atrim=duration=${f(duration)},aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo${audioTail}[aout]`);
+  } else {
+    chains.push(`anullsrc=channel_layout=stereo:sample_rate=48000,atrim=duration=${f(duration)}${audioTail}[aout]`);
+  }
+
+  return { inputs, filterGraph: chains.join(";\n"), videoLabel: audioOnly ? null : "vout", audioLabel: videoOnly ? null : "aout", width: W, height: H, fps, duration, hasAudioSources: audioLabels.length > 0 };
 }
 
 /** True when FFmpeg reports an audio stream in `file` (guards against stale `hasAudio` flags). */
@@ -459,72 +474,244 @@ function probeHasAudio(file, options) {
   });
 }
 
-function runFfmpeg(args, onTime, options = {}) {
+/** Runs FFmpeg; resolves with its stderr (the tail, or the whole log when `capture` is set). */
+function runFfmpeg(args, onTime, options = {}, capture = false) {
   return new Promise((resolve, reject) => {
     const child = spawn(resolveFfmpegExecutable(options), ["-hide_banner", "-y", ...args], { windowsHide: true });
     let stderr = "";
+    let log = "";
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk) => {
       stderr = `${stderr}${chunk}`.slice(-30_000);
+      if (capture) log += chunk;
       const latest = [...chunk.matchAll(/time=(\d+):(\d+):(\d+(?:\.\d+)?)/g)].at(-1);
       if (latest && onTime) onTime(Number(latest[1]) * 3600 + Number(latest[2]) * 60 + Number(latest[3]));
     });
     child.on("error", (error) => reject(error.code === "ENOENT" ? new Error("安装包缺少 LGPL FFmpeg 运行时，请重新安装 DashCut 极剪") : error));
-    child.on("close", (code) => code === 0 ? resolve() : reject(new Error(stderr.split(/\r?\n/).filter(Boolean).slice(-8).join("\n") || `FFmpeg exited with ${code}`)));
+    child.on("close", (code) => code === 0 ? resolve(capture ? log : stderr) : reject(new Error(stderr.split(/\r?\n/).filter(Boolean).slice(-8).join("\n") || `FFmpeg exited with ${code}`)));
   });
 }
+
+const OUTPUT_FORMATS = new Set(["mp4", "mov", "m4a", "wav", "gif"]);
+const LOUDNORM_TP = -1.5;
+const LOUDNORM_LRA = 11;
+
+/** Fills defaults for `request.output` (mp4 / H.264 / no loudness target). */
+function normalizeOutput(output) {
+  const format = OUTPUT_FORMATS.has(output?.format) ? output.format : "mp4";
+  const codec = output?.codec === "hevc" ? "hevc" : "h264";
+  const target = output?.loudnessTarget;
+  const loudnessTarget = target === null || target === undefined || !Number.isFinite(Number(target)) ? null : clamp(Number(target), -70, -5);
+  const gif = {
+    fps: clamp(Math.round(num(output?.gif?.fps, 12)) || 12, 1, 30),
+    width: even(clamp(num(output?.gif?.width, 480) || 480, 16, 3840)),
+    maxDuration: Math.max(0.1, num(output?.gif?.maxDuration, 15) || 15),
+  };
+  return { format, codec, loudnessTarget: format === "gif" ? null : loudnessTarget, gif };
+}
+
+/** HEVC encoder args derived from the H.264 settings: same rate control, ~70 % of the bitrate. */
+function hevcEncoderArgs(platform, settings) {
+  const h264 = videoEncoderArgs(platform, settings);
+  const h264Bitrate = parseInt(h264[h264.indexOf("-b:v") + 1], 10);
+  const bitrate = Math.max(500, Math.round(h264Bitrate * 0.7));
+  if (platform === "darwin") {
+    return ["-c:v", "hevc_videotoolbox", "-profile:v", "main", "-allow_sw", "1", "-realtime", "0", "-b:v", `${bitrate}k`, "-maxrate", `${Math.round(bitrate * 1.35)}k`, "-bufsize", `${bitrate * 2}k`];
+  }
+  if (platform === "win32") {
+    return ["-c:v", "hevc_mf", "-hw_encoding", settings.hardware === false ? "0" : "1", "-rate_control", "quality", "-quality", settings.finalPass ? "82" : "76", "-b:v", `${bitrate}k`];
+  }
+  throw new Error(`当前平台 ${platform} 尚未提供 LGPL HEVC 编码器`);
+}
+
+/** Parses the JSON block printed by `loudnorm=print_format=json`; null when unusable (e.g. silence). */
+function parseLoudnormJson(stderr) {
+  const match = [...String(stderr).matchAll(/\{[^{}]*"input_i"[^{}]*\}/g)].at(-1);
+  if (!match) return null;
+  try {
+    const data = JSON.parse(match[0]);
+    const values = { I: Number(data.input_i), TP: Number(data.input_tp), LRA: Number(data.input_lra), thresh: Number(data.input_thresh), offset: Number(data.target_offset) };
+    return Object.values(values).every(Number.isFinite) && values.I > -70 ? values : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Second-pass linear loudnorm using the measured values; loudnorm upsamples, so resample back. */
+function loudnormFilters(target, measured) {
+  return [
+    `loudnorm=I=${f(target)}:TP=${LOUDNORM_TP}:LRA=${LOUDNORM_LRA}:measured_I=${f(measured.I)}:measured_TP=${f(measured.TP)}:measured_LRA=${f(measured.LRA)}:measured_thresh=${f(measured.thresh)}:offset=${f(measured.offset)}:linear=true:print_format=summary`,
+    "aresample=48000",
+  ];
+}
+
+/** Parses the last `ebur128` Summary block: integrated loudness, loudness range and true peak. */
+function parseEbur128Summary(stderr) {
+  const text = String(stderr);
+  const at = text.lastIndexOf("Summary:");
+  if (at < 0) return { integratedLufs: null, loudnessRange: null, truePeak: null };
+  const summary = text.slice(at);
+  const value = (pattern) => {
+    const raw = summary.match(pattern)?.[1];
+    const parsed = raw === undefined || /inf|nan/i.test(raw) ? NaN : Number(raw);
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+  const integrated = value(/\bI:\s*(-?inf|-?nan|-?[\d.]+)\s*LUFS/i);
+  return {
+    // ebur128 reports its -70 LUFS absolute gate for silence.
+    integratedLufs: integrated === null || integrated <= -70 ? null : integrated,
+    loudnessRange: value(/\bLRA:\s*(-?inf|-?nan|-?[\d.]+)\s*LU\b/i),
+    truePeak: value(/Peak:\s*(-?inf|-?nan|-?[\d.]+)\s*dBFS/i),
+  };
+}
+
+/** Pairs `silence_start` / `silence_end` lines; an open silence is closed at `duration`. */
+function parseSilences(stderr, duration) {
+  const ranges = [];
+  let open = null;
+  for (const match of String(stderr).matchAll(/silence_(start|end):\s*(-?[\d.]+)/g)) {
+    const time = clamp(Number(match[2]), 0, duration);
+    if (match[1] === "start") open = time;
+    else if (open !== null) {
+      if (time > open) ranges.push({ start: open, end: time });
+      open = null;
+    }
+  }
+  if (open !== null && duration > open) ranges.push({ start: open, end: duration });
+  return ranges;
+}
+
+/** Parses `blackdetect` ranges. */
+function parseBlackFrames(stderr, duration) {
+  return [...String(stderr).matchAll(/black_start:\s*(-?[\d.]+)\s+black_end:\s*(-?[\d.]+)/g)]
+    .map((match) => ({ start: clamp(Number(match[1]), 0, duration), end: clamp(Number(match[2]), 0, duration) }))
+    .filter((range) => range.end > range.start);
+}
+
+/** Prepares JPEG stills (no PNG decoder in the LGPL build) and finds clips whose file has no audio. */
+async function prepareInputs(request, options, tempDir, { stills = true, audio = true } = {}) {
+  const duration = num(request.duration);
+  const visuals = Array.isArray(request.visuals) ? request.visuals : [];
+  const usable = visuals.filter((visual) => clipDuration(visual) > 0 && num(visual.start) < duration);
+  const sources = {};
+  const prepared = new Map();
+  if (stills) {
+    for (const [index, visual] of usable.entries()) {
+      if (visual.kind !== "image" || !options.prepareStill) continue;
+      if (!prepared.has(visual.path)) prepared.set(visual.path, await options.prepareStill(visual.path, path.join(tempDir, `still-${prepared.size}.jpg`)));
+      sources[index] = prepared.get(visual.path);
+    }
+  }
+  const silentVisuals = new Set();
+  const audioChecks = new Map();
+  for (const [index, visual] of audio ? usable.entries() : []) {
+    if (visual.kind !== "video" || !visual.hasAudio || visual.audio?.muted || isFrozen(visual)) continue;
+    if (!audioChecks.has(visual.path)) audioChecks.set(visual.path, probeHasAudio(visual.path, options));
+    if (!(await audioChecks.get(visual.path))) silentVisuals.add(index);
+  }
+  return { sources, silentVisuals };
+}
+
+/** Pass 1 of a loudness-targeted export: measures the audio mix only. Null when it cannot be normalised. */
+async function measureLoudness(request, options, tempDir, inputs, target, onTime) {
+  const graph = buildCompositionGraph(request, { ...inputs, audioOnly: true, audioFilters: [`loudnorm=I=${f(target)}:TP=${LOUDNORM_TP}:LRA=${LOUDNORM_LRA}:print_format=json`] });
+  if (!graph.hasAudioSources) return null;
+  const graphPath = path.join(tempDir, "loudness-graph.txt");
+  await writeFile(graphPath, graph.filterGraph, "utf8");
+  const stderr = await runFfmpeg([...graph.inputs, "-/filter_complex", graphPath, "-map", `[${graph.audioLabel}]`, "-t", f(graph.duration), "-f", "null", "-"], onTime, options);
+  return parseLoudnormJson(stderr);
+}
+
+const GIF_PALETTE = "split[gifa][gifb];[gifa]palettegen=stats_mode=diff[gifpal];[gifb][gifpal]paletteuse=dither=bayer:bayer_scale=4:diff_mode=rectangle";
 
 async function exportComposition(request, options) {
   const visuals = Array.isArray(request.visuals) ? request.visuals : [];
   if (!visuals.length && !(request.audios || []).length) throw new Error("时间线中没有可导出的内容");
   const duration = num(request.duration);
   if (!(duration > 0)) throw new Error("导出时长无效");
+  const output = normalizeOutput(request.output);
+  const audioOnly = output.format === "m4a" || output.format === "wav";
+  const isGif = output.format === "gif";
   const exportPlatform = options.platform ?? process.platform;
-  const tempDir = await mkdtemp(path.join(options.tempPath, "dashcut-composition-"));
+  const tempDir = await mkdtemp(path.join(options.tempPath || tmpdir(), "dashcut-composition-"));
   const emit = (progress, stage) => options.onProgress?.({ progress: Math.max(0, Math.min(100, Math.round(progress))), stage });
   try {
     emit(0, "正在准备素材");
-    const width = even(num(request.width, 1920));
-    const height = even(num(request.height, 1080));
-    const assPath = path.join(tempDir, "subtitles.ass");
-    await writeFile(assPath, createAss(request.subtitles || [], request.subtitleStyle || {}, width, height, request.subtitleMode), "utf8");
+    const inputs = await prepareInputs(request, options, tempDir, { stills: !audioOnly, audio: !isGif });
 
-    // The LGPL FFmpeg build has no PNG decoder, so the host re-encodes stills to JPEG first.
-    const sources = {};
-    const prepared = new Map();
-    const usable = visuals.filter((visual) => clipDuration(visual) > 0 && num(visual.start) < duration);
-    for (const [index, visual] of usable.entries()) {
-      if (visual.kind !== "image" || !options.prepareStill) continue;
-      if (!prepared.has(visual.path)) prepared.set(visual.path, await options.prepareStill(visual.path, path.join(tempDir, `still-${prepared.size}.jpg`)));
-      sources[index] = prepared.get(visual.path);
+    // GIF: render directly at the target width (height follows the canvas) and frame rate, capped at maxDuration.
+    let renderRequest = request;
+    if (isGif) {
+      const canvasW = even(num(request.width, 1920));
+      const canvasH = even(num(request.height, 1080));
+      renderRequest = { ...request, width: output.gif.width, height: even(Math.round((output.gif.width * canvasH) / canvasW)), duration: Math.min(duration, output.gif.maxDuration) };
+    }
+    let assPath;
+    if (!audioOnly) {
+      assPath = path.join(tempDir, "subtitles.ass");
+      const width = even(num(renderRequest.width, 1920));
+      const height = even(num(renderRequest.height, 1080));
+      await writeFile(assPath, createAss(request.subtitles || [], request.subtitleStyle || {}, width, height, request.subtitleMode), "utf8");
     }
 
-    const silentVisuals = new Set();
-    const audioChecks = new Map();
-    for (const [index, visual] of usable.entries()) {
-      if (visual.kind !== "video" || !visual.hasAudio || visual.audio?.muted || isFrozen(visual)) continue;
-      if (!audioChecks.has(visual.path)) audioChecks.set(visual.path, probeHasAudio(visual.path, options));
-      if (!(await audioChecks.get(visual.path))) silentVisuals.add(index);
+    // Loudness target: measuring pass (0-25 %), then the render pass (25-100 %).
+    let audioFilters = [];
+    let renderStart = 0;
+    if (output.loudnessTarget !== null) {
+      emit(1, "正在分析响度");
+      const measured = await measureLoudness(request, options, tempDir, inputs, output.loudnessTarget, (time) => emit(Math.min(24, (time / duration) * 25), "正在分析响度"));
+      if (measured) audioFilters = loudnormFilters(output.loudnessTarget, measured);
+      renderStart = 25;
+      emit(renderStart, "正在合成多轨视频");
     }
+    const progressFor = (time, total) => renderStart + Math.min(99 - renderStart, (time / total) * (100 - renderStart));
 
-    const graph = buildCompositionGraph(request, { sources, assPath, silentVisuals });
+    const graph = buildCompositionGraph(renderRequest, {
+      ...inputs,
+      assPath,
+      audioOnly,
+      audioFilters,
+      fps: isGif ? output.gif.fps : undefined,
+      videoOnly: isGif,
+      videoTail: isGif ? GIF_PALETTE : undefined,
+    });
     const graphPath = path.join(tempDir, "graph.txt");
     await writeFile(graphPath, graph.filterGraph, "utf8");
+
+    if (audioOnly) {
+      const codecArgs = output.format === "m4a"
+        ? ["-c:a", "aac", "-b:a", "256k", "-ar", "48000", "-ac", "2", "-movflags", "+faststart", "-f", "ipod"]
+        : ["-c:a", "pcm_s16le", "-ar", "48000", "-ac", "2", "-f", "wav"];
+      const args = [...graph.inputs, "-/filter_complex", graphPath, "-map", `[${graph.audioLabel}]`, "-vn", ...codecArgs, "-t", f(graph.duration), options.outputPath];
+      await runFfmpeg(args, (time) => emit(progressFor(time, graph.duration), "正在导出音频"), options);
+      emit(100, "导出完成");
+      return { outputPath: options.outputPath, duration: graph.duration, subtitleFiles: [] };
+    }
+    if (isGif) {
+      const args = [...graph.inputs, "-/filter_complex", graphPath, "-map", `[${graph.videoLabel}]`, "-an", "-c:v", "gif", "-loop", "0", "-t", f(graph.duration), "-f", "gif", options.outputPath];
+      await runFfmpeg(args, (time) => emit(progressFor(time, graph.duration), "正在生成 GIF"), options);
+      emit(100, "导出完成");
+      return { outputPath: options.outputPath, duration: graph.duration, subtitleFiles: [] };
+    }
+
     const hardwareModes = exportPlatform === "win32" ? [true, false] : [undefined];
+    const hevc = output.codec === "hevc";
     let finalError;
     for (const hardware of hardwareModes) {
-      const encoderArgs = videoEncoderArgs(exportPlatform, { width: graph.width, height: graph.height, fps: graph.fps, destination: request.platform, finalPass: true, hardware });
+      const encoderSettings = { width: graph.width, height: graph.height, fps: graph.fps, destination: request.platform, finalPass: true, hardware };
+      const encoderArgs = hevc ? hevcEncoderArgs(exportPlatform, encoderSettings) : videoEncoderArgs(exportPlatform, encoderSettings);
       const args = [
         ...graph.inputs,
         "-/filter_complex", graphPath,
         "-map", `[${graph.videoLabel}]`, "-map", `[${graph.audioLabel}]`,
         ...encoderArgs,
-        "-r", String(graph.fps), "-pix_fmt", exportPlatform === "win32" ? "nv12" : "yuv420p", "-color_range", "tv", "-tag:v", "avc1",
+        // hvc1 (parameter sets in the sample entry) is the tag QuickTime and Apple devices require for HEVC.
+        "-r", String(graph.fps), "-pix_fmt", exportPlatform === "win32" ? "nv12" : "yuv420p", "-color_range", "tv", "-tag:v", hevc ? "hvc1" : "avc1",
         "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
-        "-t", f(graph.duration), "-movflags", "+faststart", options.outputPath,
+        "-t", f(graph.duration), "-movflags", "+faststart", "-f", output.format === "mov" ? "mov" : "mp4", options.outputPath,
       ];
       try {
-        await runFfmpeg(args, (time) => emit(Math.min(99, (time / graph.duration) * 100), hardware === false ? "正在使用兼容模式完成导出" : "正在合成多轨视频"), options);
+        await runFfmpeg(args, (time) => emit(progressFor(time, graph.duration), hardware === false ? "正在使用兼容模式完成导出" : "正在合成多轨视频"), options);
         finalError = undefined;
         break;
       } catch (error) {
@@ -545,4 +732,61 @@ async function exportComposition(request, options) {
   }
 }
 
-module.exports = { atempoChain, buildCompositionGraph, clipDuration, exportComposition, keyframeExpression, keyframeValue };
+const ANALYSIS_WIDTH = 320;
+const ANALYSIS_FPS = 10;
+
+/**
+ * Renders the composition small (no captions, no file written) and measures loudness (ebur128),
+ * silences (silencedetect, -45 dB for 2 s) and black frames (blackdetect, 0.5 s). Times are timeline seconds.
+ * `options`: { tempPath?, ffmpegPath?, platform?, prepareStill?, onProgress? }.
+ */
+async function analyzeComposition(request, options = {}) {
+  const duration = num(request.duration);
+  if (!(duration > 0)) throw new Error("导出时长无效");
+  const tempDir = await mkdtemp(path.join(options.tempPath || tmpdir(), "dashcut-analysis-"));
+  const emit = (progress, stage) => options.onProgress?.({ progress: Math.max(0, Math.min(100, Math.round(progress))), stage });
+  try {
+    emit(0, "正在准备素材");
+    const inputs = await prepareInputs(request, options, tempDir);
+    const canvasW = even(num(request.width, 1920));
+    const canvasH = even(num(request.height, 1080));
+    const width = Math.min(canvasW, ANALYSIS_WIDTH);
+    const graph = buildCompositionGraph({ ...request, width, height: even(Math.round((width * canvasH) / canvasW)) }, {
+      ...inputs,
+      fps: ANALYSIS_FPS,
+      videoTail: "format=yuv420p,blackdetect=d=0.5:pic_th=0.98:pix_th=0.10",
+      audioFilters: ["ebur128=peak=true:framelog=quiet", "silencedetect=n=-45dB:d=2"],
+    });
+    const graphPath = path.join(tempDir, "analysis-graph.txt");
+    await writeFile(graphPath, graph.filterGraph, "utf8");
+    const log = await runFfmpeg(
+      [...graph.inputs, "-/filter_complex", graphPath, "-map", `[${graph.videoLabel}]`, "-map", `[${graph.audioLabel}]`, "-t", f(graph.duration), "-f", "null", "-"],
+      (time) => emit(Math.min(99, (time / graph.duration) * 100), "正在分析成片"),
+      options,
+      true,
+    );
+    emit(100, "分析完成");
+    return {
+      duration: graph.duration,
+      ...parseEbur128Summary(log),
+      blackFrames: parseBlackFrames(log, graph.duration),
+      silences: parseSilences(log, graph.duration),
+    };
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+}
+
+module.exports = {
+  analyzeComposition,
+  atempoChain,
+  buildCompositionGraph,
+  clipDuration,
+  exportComposition,
+  keyframeExpression,
+  keyframeValue,
+  normalizeOutput,
+  parseEbur128Summary,
+  parseLoudnormJson,
+  parseSilences,
+};

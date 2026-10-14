@@ -7,7 +7,15 @@ export const projectExtension = "dashcut";
 
 export type CaptionStyle = SubtitleStyle;
 export type CaptionMode = "zh" | "en" | "both";
-export type ExportSettings = { resolution: 720 | 1080 | 2160; fps: 30 | 60; platform: "bilibili" | "youtube" };
+export type ExportSettings = {
+  resolution: 720 | 1080 | 2160;
+  fps: 30 | 60;
+  platform: "bilibili" | "youtube";
+  // Added later; optional so older files open unchanged.
+  format?: CompositionOutput["format"];
+  codec?: CompositionOutput["codec"];
+  loudnessTarget?: number | null;
+};
 
 /** Media reference stored on disk; previews (thumbnails, filmstrips, waveforms) are rebuilt on open. */
 export type StoredAsset = {

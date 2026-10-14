@@ -28,4 +28,11 @@ The FFmpeg runtime uses libass for styled ASS subtitle rendering. Release builds
 
 Local captions use faster-whisper, CTranslate2, PyAV, and model files selected by the user. Their license files and model terms remain applicable. Model weights are downloaded only after explicit user action and are not included in DashCut installers.
 
+## Smart reframe (face detection)
+
+Smart 16:9 → 9:16 reframing detects faces locally with MediaPipe Tasks Vision and the BlazeFace short-range face detector. Video frames never leave the computer.
+
+- MediaPipe Tasks Vision `@mediapipe/tasks-vision` 1.0.1 — Apache License 2.0 — https://github.com/google-ai-edge/mediapipe. Its WebAssembly runtime is bundled in the app.
+- BlazeFace short-range model (`blaze_face_short_range.tflite`) — Apache License 2.0 — model card: https://storage.googleapis.com/mediapipe-assets/MediaPipe%20BlazeFace%20Model%20Card%20(Short%20Range).pdf. Not included in installers; downloaded from `storage.googleapis.com/mediapipe-models` the first time smart reframe runs.
+
 This notice is informational and is not legal advice. Codec patent obligations, where applicable, are separate from open-source copyright licenses.

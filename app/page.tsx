@@ -5,6 +5,10 @@ import { Icon } from "./editor/icons";
 import { Inspector, InspectorTab } from "./editor/Inspector";
 import { buildFilmstrip, buildThumbnail, captureFrame, probeFile } from "./editor/media";
 import { defaultTextStyle, rasterizeText, textPresets } from "./editor/text";
+import { computeReframe } from "./editor/reframe";
+import { analysisIssues, captionIssues, HealthIssue } from "./editor/health";
+import { HealthCheck } from "./editor/HealthCheck";
+import { LoudnessMeter } from "./editor/LoudnessMeter";
 import { buildDocument, EditorState, migrateDocument, ProjectDocument, readDocument } from "./editor/project-file";
 import {
   addTrack, Asset, Clip, clipAt, clipDuration, clipEnd, createClip, defaultClipSettings, deleteClips, EditOptions, freezeFrame, hasRoom,
@@ -49,6 +53,15 @@ function savedEditingSettings(): { hotwords: string; cleanCut: CleanCutSettings 
 
 const kindLabels: Record<Asset["kind"], string> = { video: "视频", image: "图片", gif: "动图", audio: "音频", text: "文本" };
 const freezeLength = 3;
+type ExportPreset = { id: string; label: string; note: string; format: CompositionOutput["format"]; codec: CompositionOutput["codec"]; loudness: number | null; resolution?: 720 | 1080 | 2160; fps?: 30 | 60; ratio?: "16:9" | "9:16"; platform?: "bilibili" | "youtube" };
+const exportPresets: ExportPreset[] = [
+  { id: "bilibili", label: "B 站横屏", note: "16:9 · 1080p60 · H.264", format: "mp4", codec: "h264", loudness: -14, resolution: 1080, fps: 60, ratio: "16:9", platform: "bilibili" },
+  { id: "youtube-4k", label: "YouTube 4K", note: "16:9 · 2160p · HEVC", format: "mp4", codec: "hevc", loudness: -14, resolution: 2160, fps: 30, ratio: "16:9", platform: "youtube" },
+  { id: "vertical", label: "Shorts / 抖音竖屏", note: "9:16 · 1080p · H.264", format: "mp4", codec: "h264", loudness: -14, resolution: 1080, fps: 30, ratio: "9:16", platform: "youtube" },
+  { id: "audio", label: "仅音频", note: "M4A · AAC 256k", format: "m4a", codec: "h264", loudness: -16 },
+  { id: "gif", label: "GIF 动图", note: "12 fps · 最长 15 秒", format: "gif", codec: "h264", loudness: null },
+];
+const formatLabels: Record<CompositionOutput["format"], string> = { mp4: "MP4", mov: "MOV", m4a: "M4A 音频", wav: "WAV 音频", gif: "GIF 动图" };
 
 function isTyping(target: EventTarget | null) {
   const element = target as HTMLElement | null;
@@ -107,6 +120,11 @@ export default function Home() {
   const [exportFps, setExportFps] = useState<30 | 60>(60);
   const [exportResolution, setExportResolution] = useState<720 | 1080 | 2160>(1080);
   const [platform, setPlatform] = useState<"bilibili" | "youtube">("bilibili");
+  const [exportFormat, setExportFormat] = useState<CompositionOutput["format"]>("mp4");
+  const [exportCodec, setExportCodec] = useState<CompositionOutput["codec"]>("h264");
+  const [loudnessTarget, setLoudnessTarget] = useState<number | null>(-14);
+  const [healthOpen, setHealthOpen] = useState(false);
+  const [health, setHealth] = useState<{ running: boolean; issues: HealthIssue[] | null }>({ running: false, issues: null });
   const [exporting, setExporting] = useState(false);
   const [progress, setProgress] = useState(0);
   const [progressStage, setProgressStage] = useState("");
@@ -129,6 +147,8 @@ export default function Home() {
   const [hotwords, setHotwords] = useState("");
   const [cleanCutSettings, setCleanCutSettings] = useState<CleanCutSettings>(defaultCleanCutSettings);
   const [agentOpen, setAgentOpen] = useState(false);
+  const [reframeOpen, setReframeOpen] = useState(false);
+  const [reframeOptions, setReframeOptions] = useState({ tracking: 0.4, switchCanvas: true, scope: "main" as "main" | "selected" });
   const [agentMessages, setAgentMessages] = useState<AgentMessage[]>([]);
   const [agentRunning, setAgentRunning] = useState(false);
   const [agentConfig, setAgentConfig] = useState<AgentProviderConfig | null>(null);
@@ -919,6 +939,73 @@ export default function Home() {
 
   /* ------------------------------------------------------------ export & cover */
 
+  async function runHealthCheck() {
+    if (!window.dashCutDesktop) return setToast("发布前检查仅支持桌面版");
+    if (!project.clips.length) return setToast("时间轴是空的");
+    setHealth({ running: true, issues: null });
+    setProgressStage("");
+    const issues: HealthIssue[] = [];
+    try {
+      // Missing media first: analysis cannot render clips whose files are gone.
+      const used = assets.filter((asset) => asset.kind !== "text" && usedAssets.has(asset.id));
+      const present = await window.dashCutDesktop.mediaExists(used.map((asset) => asset.sourcePath));
+      const missing = used.filter((_, index) => !present[index]);
+      for (const asset of missing) issues.push({ id: `missing-${asset.id}`, severity: "error", title: `缺少素材：${asset.name}`, detail: asset.sourcePath || "没有本地路径", fix: "relink" });
+      const canvas = canvasSize(ratio, exportResolution);
+      const context = document.createElement("canvas").getContext("2d")!;
+      issues.push(...captionIssues(project.subtitles, subtitleStyle, subtitleMode, canvas, (text, fontPx) => {
+        context.font = `700 ${fontPx}px ${subtitleStyle.fontFamily}`;
+        return context.measureText(text).width;
+      }));
+      if (!missing.length) {
+        setProgressStage("正在渲染并测量成片…");
+        const request = toComposition(project, assets, { ratio, resolution: 720, fps: 30, platform, subtitleStyle, subtitleMode });
+        // Titles are skipped here: they cannot change loudness, black frames or silence.
+        issues.push(...analysisIssues(await window.dashCutDesktop.analyzeComposition(request), exportFormat === "gif" ? null : loudnessTarget));
+      }
+      setHealth({ running: false, issues });
+    } catch (error) {
+      setHealth({ running: false, issues });
+      setToast(error instanceof Error ? `检查未完成：${error.message}` : "检查未完成");
+    }
+  }
+
+  function fixHealthIssue(issue: HealthIssue) {
+    if (issue.fix === "loudness") {
+      setLoudnessTarget(-14);
+      setHealth((state) => ({ ...state, issues: state.issues?.filter((item) => item.fix !== "loudness") ?? null }));
+      return setToast("已开启响度标准化（-14 LUFS），导出时自动修正");
+    }
+    if (issue.fix === "relink") {
+      setMissingAssets(assets.filter((asset) => issue.id === `missing-${asset.id}`).map((asset) => asset.id));
+      return setHealthOpen(false);
+    }
+    if (issue.fix === "caption" && issue.captionId !== undefined) {
+      setSelectedSubtitle(issue.captionId);
+      setLeftTab("subtitles");
+      if (issue.time !== undefined) seek(issue.time + 0.05);
+      setHealthOpen(false);
+      setExportOpen(false);
+    }
+  }
+
+  function exportOutput(): CompositionOutput {
+    return { format: exportFormat, codec: exportCodec, loudnessTarget: exportFormat === "gif" ? null : loudnessTarget, gif: { fps: 12, width: ratio === "9:16" ? 360 : 480, maxDuration: 15 } };
+  }
+
+  function applyExportPreset(preset: ExportPreset) {
+    setExportFormat(preset.format);
+    setExportCodec(preset.codec);
+    setLoudnessTarget(preset.loudness);
+    if (preset.resolution) setExportResolution(preset.resolution);
+    if (preset.fps) setExportFps(preset.fps);
+    if (preset.platform) setPlatform(preset.platform);
+    if (preset.ratio && preset.ratio !== ratio) {
+      setRatio(preset.ratio);
+      setToast(`画布已改为 ${preset.ratio}；横版素材可用「智能转竖屏」自动取景`);
+    }
+  }
+
   async function startExport() {
     if (!window.dashCutDesktop) return setToast("真实视频导出仅支持桌面版");
     if (!project.clips.length) return setToast("请先把素材拖到时间轴");
@@ -936,7 +1023,7 @@ export default function Home() {
         const path = await window.dashCutDesktop.writeExportLayer(raster.bytes.buffer as ArrayBuffer);
         textLayers.set(clip.id, { path, width: raster.width, height: raster.height, boxWidth: raster.boxWidth, boxHeight: raster.boxHeight });
       }
-      const request = toComposition(project, assets, { ratio, resolution: exportResolution, fps: exportFps, platform, subtitleStyle, subtitleMode }, textLayers);
+      const request = { ...toComposition(project, assets, { ratio, resolution: exportResolution, fps: exportFps, platform, subtitleStyle, subtitleMode }, textLayers), output: exportOutput() };
       const result = await window.dashCutDesktop.exportComposition(request);
       if (!result.canceled && result.outputPath) {
         setExportResult({ outputPath: result.outputPath, subtitleFiles: result.subtitleFiles ?? [] });
@@ -1033,6 +1120,48 @@ export default function Home() {
     if (!primaryId) return;
     commit((state) => updateClip(state, primaryId, patch, options), `${primaryId}-${key}`);
   }, [commit, options, primaryId]);
+
+  /** One undo step that also records canvas/caption settings, so undo restores them together with the clips. */
+  function commitWithView(nextProject: Project, after: Partial<NonNullable<Project["view"]>>) {
+    const before = { ratio, captionStyle: subtitleStyle as unknown as Record<string, unknown>, captionMode: subtitleMode };
+    setHistory((state) => ({ past: [...state.past.slice(-99), { ...state.present, view: before }], present: { ...nextProject, view: { ...before, ...after } }, future: [], key: "", at: Date.now(), revision: state.revision + 1 }));
+  }
+
+  /* ------------------------------------------------------------ smart reframe */
+
+  async function runReframe() {
+    if (!window.dashCutDesktop) return setToast("智能转竖屏仅支持桌面版");
+    const targets = (reframeOptions.scope === "selected" ? selectedClips : trackClips(project, mainTrack(project).id))
+      .filter((clip) => assetMap.get(clip.assetId)?.kind === "video" && clip.freezeAt === null && !clip.reverse);
+    if (!targets.length) return setToast(reframeOptions.scope === "selected" ? "请先选择视频片段" : "主轨上没有可以转竖屏的视频");
+    setReframeOpen(false);
+    const canvasRatio = reframeOptions.switchCanvas ? "9:16" : ratio;
+    try {
+      setBusy("正在加载人脸检测模型…");
+      const { loadFaceDetector, trackSubject } = await import("./editor/face-tracking");
+      const detector = await loadFaceDetector(() => window.dashCutDesktop!.faceModel());
+      let next = project;
+      let faces = 0;
+      let samples = 0;
+      for (const [index, clip] of targets.entries()) {
+        const asset = assetMap.get(clip.assetId)!;
+        const tracked = await trackSubject(asset, clip, detector, 0.25, (fraction) => setBusy(`正在跟踪主体 ${index + 1}/${targets.length} · ${Math.round(fraction * 100)}%`));
+        const quarter = clip.rotate90 === 90 || clip.rotate90 === 270;
+        const mediaAspect = (asset.width * clip.crop.w) / (asset.height * clip.crop.h);
+        const result = computeReframe(tracked, { mediaAspect: quarter ? 1 / mediaAspect : mediaAspect, canvasAspect: canvasRatio === "9:16" ? 9 / 16 : 16 / 9, tracking: reframeOptions.tracking });
+        faces += result.detected;
+        samples += tracked.length;
+        next = { ...next, clips: next.clips.map((item) => item.id === clip.id ? { ...item, transform: { ...item.transform, scale: result.scale, x: 0 }, keyframes: { ...item.keyframes, x: result.keyframes } } : item) };
+      }
+      commitWithView(next, { ratio: canvasRatio });
+      setRatio(canvasRatio);
+      setToast(faces ? `已为 ${targets.length} 个片段生成跟随主体的竖屏取景（${Math.round((faces / samples) * 100)}% 画面检测到人脸），可在「画面」中微调关键帧` : "没有检测到人脸，已居中裁切；可在「画面」中手动调整位置");
+    } catch (error) {
+      setToast(error instanceof Error ? `智能转竖屏失败：${error.message}` : "智能转竖屏失败");
+    } finally {
+      setBusy("");
+    }
+  }
 
   /* ------------------------------------------------------------ assistant */
 
@@ -1203,16 +1332,16 @@ export default function Home() {
       assets,
       captionStyle: subtitleStyle,
       captionMode: subtitleMode,
-      exportSettings: { resolution: exportResolution, fps: exportFps, platform },
+      exportSettings: { resolution: exportResolution, fps: exportFps, platform, format: exportFormat, codec: exportCodec, loudnessTarget },
       cover: { title: coverTitle, accent: coverAccent },
     };
   }
 
   // Everything that is written to disk except the save timestamp; changes mark the project dirty.
   const fingerprint = useMemo(() => {
-    const doc = buildDocument({ id: projectMeta.id, title: projectMeta.title, createdAt: projectMeta.createdAt, ratio, project, assets, captionStyle: subtitleStyle, captionMode: subtitleMode, exportSettings: { resolution: exportResolution, fps: exportFps, platform }, cover: { title: coverTitle, accent: coverAccent } }, new Date(0));
+    const doc = buildDocument({ id: projectMeta.id, title: projectMeta.title, createdAt: projectMeta.createdAt, ratio, project, assets, captionStyle: subtitleStyle, captionMode: subtitleMode, exportSettings: { resolution: exportResolution, fps: exportFps, platform, format: exportFormat, codec: exportCodec, loudnessTarget }, cover: { title: coverTitle, accent: coverAccent } }, new Date(0));
     return JSON.stringify(doc);
-  }, [assets, coverAccent, coverTitle, exportFps, exportResolution, platform, project, projectMeta, ratio, subtitleMode, subtitleStyle]);
+  }, [assets, coverAccent, coverTitle, exportCodec, exportFormat, exportFps, exportResolution, loudnessTarget, platform, project, projectMeta, ratio, subtitleMode, subtitleStyle]);
   const dirty = savedFingerprint === null ? project.clips.length > 0 || assets.length > 0 : fingerprint !== savedFingerprint;
 
   useEffect(() => {
@@ -1272,6 +1401,9 @@ export default function Home() {
     setSubtitleMode(state.captionMode);
     setExportResolution(state.exportSettings.resolution);
     setExportFps(state.exportSettings.fps);
+    setExportFormat(state.exportSettings.format ?? "mp4");
+    setExportCodec(state.exportSettings.codec ?? "h264");
+    setLoudnessTarget(state.exportSettings.loudnessTarget === undefined ? -14 : state.exportSettings.loudnessTarget);
     setPlatform(state.exportSettings.platform);
     setCoverTitle(state.cover.title || coverTitle);
     setCoverAccent(state.cover.accent || coverAccent);
@@ -1475,9 +1607,9 @@ export default function Home() {
       </aside>
 
       <section className="stage">
-        <div className="stage-toolbar"><span>{busy || (hoverTime !== null && toggles.previewAxis && !playing ? `预览轴 ${formatClock(hoverTime)}` : "")}</span><div className="segmented ratio-switch"><button className={ratio === "16:9" ? "active" : ""} onClick={() => setRatio("16:9")}>16:9 横屏</button><button className={ratio === "9:16" ? "active" : ""} onClick={() => setRatio("9:16")}>9:16 竖屏</button></div></div>
+        <div className="stage-toolbar"><span>{busy || (hoverTime !== null && toggles.previewAxis && !playing ? `预览轴 ${formatClock(hoverTime)}` : "")}</span><div className="stage-actions"><button className="ghost-action reframe-button" title="跟随人脸自动裁切为竖屏" onClick={() => setReframeOpen(true)}>✦ 智能转竖屏</button><div className="segmented ratio-switch"><button className={ratio === "16:9" ? "active" : ""} onClick={() => setRatio("16:9")}>16:9 横屏</button><button className={ratio === "9:16" ? "active" : ""} onClick={() => setRatio("9:16")}>9:16 竖屏</button></div></div></div>
         <Preview project={project} assets={assetMap} time={previewTime} rate={playing ? shuttle : 0} muted={muted} ratio={ratio} subtitleMode={subtitleMode} subtitleStyle={subtitleStyle} onImport={() => fileInputRef.current?.click()} />
-        <div className="player-controls"><span>{formatClock(current, true, exportFps)} <i>/ {formatClock(duration, true, exportFps)}</i>{playing && shuttle !== 1 && <em className="shuttle-badge">{shuttle > 0 ? "▶" : "◀"} {Math.abs(shuttle)}×</em>}</span><div><button title="回到开头" onClick={() => seek(0)}><Icon name="prev" size={14} /></button><button data-play-toggle className="play" onClick={togglePlay} title="播放 / 暂停（空格）"><Icon name={playing ? "pause" : "play"} size={14} /></button><button title="跳到结尾" onClick={() => seek(duration)}><Icon name="next" size={14} /></button></div><div><button title={muted ? "取消静音" : "静音预览"} onClick={() => setMuted(!muted)}><Icon name={muted ? "mute" : "volume"} size={15} /></button><button title="全屏预览" onClick={() => void document.querySelector(".video-frame")?.requestFullscreen()}><Icon name="fullscreen" size={14} /></button></div></div>
+        <div className="player-controls"><span>{formatClock(current, true, exportFps)} <i>/ {formatClock(duration, true, exportFps)}</i>{playing && shuttle !== 1 && <em className="shuttle-badge">{shuttle > 0 ? "▶" : "◀"} {Math.abs(shuttle)}×</em>}</span><div><button title="回到开头" onClick={() => seek(0)}><Icon name="prev" size={14} /></button><button data-play-toggle className="play" onClick={togglePlay} title="播放 / 暂停（空格）"><Icon name={playing ? "pause" : "play"} size={14} /></button><button title="跳到结尾" onClick={() => seek(duration)}><Icon name="next" size={14} /></button></div><div><LoudnessMeter active={playing && !muted} target={loudnessTarget} /><button title={muted ? "取消静音" : "静音预览"} onClick={() => setMuted(!muted)}><Icon name={muted ? "mute" : "volume"} size={15} /></button><button title="全屏预览" onClick={() => void document.querySelector(".video-frame")?.requestFullscreen()}><Icon name="fullscreen" size={14} /></button></div></div>
       </section>
 
       {agentOpen
@@ -1514,12 +1646,22 @@ export default function Home() {
     </section></div>}
 
     {exportOpen && <div className="modal-backdrop export-backdrop" onMouseDown={() => !exporting && setExportOpen(false)}><section className="export-modal" onMouseDown={(event) => event.stopPropagation()}>
-      <header><div><span className="eyebrow">EXPORT</span><h2>导出视频</h2></div><button onClick={() => !exporting && setExportOpen(false)}>×</button></header>
-      {exporting || exportResult ? <div className="export-progress"><div className="progress-ring" style={{ "--progress": `${progress * 3.6}deg` } as React.CSSProperties}><span>{progress}%</span></div><h3>{exportResult ? "导出完成" : "正在渲染视频"}</h3><p>{exportResult ? `已生成 MP4、中文 SRT 和英文 SRT` : `${progressStage} · ${exportFps} FPS`}</p>{exportResult && <div className="export-complete-actions"><button className="primary" onClick={() => window.dashCutDesktop?.revealExport(exportResult.outputPath)}>打开文件位置</button><button className="ghost-action" onClick={() => { setExportResult(null); setProgress(0); }}>继续导出</button></div>}</div> : <div className="export-form">
-        <label>发布平台<div className="platform-cards"><button className={platform === "bilibili" ? "active bili" : "bili"} onClick={() => setPlatform("bilibili")}><b>哔</b><span>哔哩哔哩<small>1080P · 高码率</small></span><i>✓</i></button><button className={platform === "youtube" ? "active youtube" : "youtube"} onClick={() => setPlatform("youtube")}><b>▶</b><span>YouTube<small>1080P · H.264</small></span><i>✓</i></button></div></label>
-        <div className="export-grid"><label>分辨率<select value={exportResolution} onChange={(event) => setExportResolution(Number(event.target.value) as 720 | 1080 | 2160)}><option value="1080">1080P</option><option value="2160">4K</option><option value="720">720P</option></select></label><label>帧率<div className="segmented"><button className={exportFps === 30 ? "active" : ""} onClick={() => setExportFps(30)}>30 FPS</button><button className={exportFps === 60 ? "active" : ""} onClick={() => setExportFps(60)}>60 FPS</button></div></label></div>
-        <div className="export-summary"><span>时长</span><strong>{formatClock(duration)}</strong><i></i><span>画布</span><strong>{ratio} · {project.tracks.filter((track) => track.kind === "video").length} 视频轨</strong></div>
-        <button className="primary full large" onClick={() => void startExport()}>开始导出 MP4 · {exportFps} FPS</button>
+      <header><div><span className="eyebrow">EXPORT</span><h2>导出</h2></div><button onClick={() => !exporting && setExportOpen(false)}>×</button></header>
+      {exporting || exportResult ? <div className="export-progress"><div className="progress-ring" style={{ "--progress": `${progress * 3.6}deg` } as React.CSSProperties}><span>{progress}%</span></div><h3>{exportResult ? "导出完成" : "正在渲染视频"}</h3><p>{exportResult ? (exportResult.subtitleFiles.length ? `已生成 ${formatLabels[exportFormat]}、中文 SRT 和英文 SRT` : `已生成 ${formatLabels[exportFormat]}`) : progressStage}</p>{exportResult && <div className="export-complete-actions"><button className="primary" onClick={() => window.dashCutDesktop?.revealExport(exportResult.outputPath)}>打开文件位置</button><button className="ghost-action" onClick={() => { setExportResult(null); setProgress(0); }}>继续导出</button></div>}</div> : <div className="export-form">
+        <div className="export-presets">{exportPresets.map((preset) => {
+          const active = preset.format === exportFormat && (preset.format !== "mp4" || (preset.codec === exportCodec && preset.resolution === exportResolution && preset.fps === exportFps && preset.ratio === ratio));
+          return <button key={preset.id} className={active ? "active" : ""} onClick={() => applyExportPreset(preset)}><b>{preset.label}</b><small>{preset.note}</small></button>;
+        })}</div>
+        <div className="export-grid">
+          <label>格式<select value={exportFormat} onChange={(event) => setExportFormat(event.target.value as CompositionOutput["format"])}>{(Object.keys(formatLabels) as Array<CompositionOutput["format"]>).map((format) => <option key={format} value={format}>{formatLabels[format]}</option>)}</select></label>
+          {(exportFormat === "mp4" || exportFormat === "mov") && <label>编码<div className="segmented"><button className={exportCodec === "h264" ? "active" : ""} onClick={() => setExportCodec("h264")}>H.264 兼容</button><button className={exportCodec === "hevc" ? "active" : ""} onClick={() => setExportCodec("hevc")}>HEVC 小体积</button></div></label>}
+          {(exportFormat === "mp4" || exportFormat === "mov") && <label>分辨率<select value={exportResolution} onChange={(event) => setExportResolution(Number(event.target.value) as 720 | 1080 | 2160)}><option value="1080">1080P</option><option value="2160">4K</option><option value="720">720P</option></select></label>}
+          {(exportFormat === "mp4" || exportFormat === "mov") && <label>帧率<div className="segmented"><button className={exportFps === 30 ? "active" : ""} onClick={() => setExportFps(30)}>30 FPS</button><button className={exportFps === 60 ? "active" : ""} onClick={() => setExportFps(60)}>60 FPS</button></div></label>}
+          {exportFormat !== "gif" && <label>响度标准化<select value={loudnessTarget === null ? "off" : String(loudnessTarget)} onChange={(event) => setLoudnessTarget(event.target.value === "off" ? null : Number(event.target.value))}><option value="-14">-14 LUFS · YouTube / B 站</option><option value="-16">-16 LUFS · 播客 / 移动端</option><option value="-23">-23 LUFS · 广播 EBU R128</option><option value="off">关闭</option></select></label>}
+        </div>
+        <div className="export-summary"><span>时长</span><strong>{formatClock(exportFormat === "gif" ? Math.min(15, duration) : duration)}</strong><i></i><span>画布</span><strong>{ratio} · {project.tracks.filter((track) => track.kind === "video").length} 视频轨</strong></div>
+        <button className="ghost-action health-button" onClick={() => setHealthOpen(true)}>先做发布前检查</button>
+        <button className="primary full large" onClick={() => void startExport()}>开始导出 {formatLabels[exportFormat]}{exportFormat === "mp4" || exportFormat === "mov" ? ` · ${exportFps} FPS` : ""}</button>
       </div>}
     </section></div>}
 
@@ -1557,6 +1699,19 @@ export default function Home() {
       <div className="about-content"><p>素材可能被移动或重命名。定位其中一个文件后，同一文件夹里同名的其他素材会自动重新链接。</p>
         {missingAssets.map((id) => assetMap.get(id)).filter(Boolean).map((asset) => <div key={asset!.id} className="recovery-row"><div><strong>{asset!.name}</strong><small>{asset!.sourcePath || "无路径"}</small></div><button className="primary" onClick={() => void relinkAsset(asset!.id)}>定位…</button></div>)}
         <button className="ghost-action" onClick={() => setMissingAssets([])}>稍后处理</button>
+      </div>
+    </section></div>}
+
+    {healthOpen && <HealthCheck running={health.running} stage={progressStage} issues={health.issues} onRun={() => void runHealthCheck()} onFix={fixHealthIssue} onSeek={(time) => { seek(time); setHealthOpen(false); setExportOpen(false); }} onClose={() => setHealthOpen(false)} />}
+
+    {reframeOpen && <div className="modal-backdrop" onMouseDown={() => setReframeOpen(false)}><section className="about-modal reframe-modal" onMouseDown={(event) => event.stopPropagation()}>
+      <header><div><span className="eyebrow">SMART REFRAME</span><h2>智能转竖屏</h2></div><button onClick={() => setReframeOpen(false)}>×</button></header>
+      <div className="about-content">
+        <p>在本机逐帧检测人脸，生成跟随主体的竖屏取景（铺满画面 + 水平位置关键帧）。首次使用会下载约 0.2 MB 的开源人脸检测模型（MediaPipe BlazeFace，Apache-2.0），视频不会上传。</p>
+        <div className="segmented"><button className={reframeOptions.scope === "main" ? "active" : ""} onClick={() => setReframeOptions({ ...reframeOptions, scope: "main" })}>主轨全部视频</button><button className={reframeOptions.scope === "selected" ? "active" : ""} onClick={() => setReframeOptions({ ...reframeOptions, scope: "selected" })}>所选片段（{selectedClips.length}）</button></div>
+        <label className="inspector-slider"><span>跟随速度</span><input type="range" min="0" max="1" step="0.05" value={reframeOptions.tracking} onChange={(event) => setReframeOptions({ ...reframeOptions, tracking: Number(event.target.value) })} /><b>{reframeOptions.tracking < 0.34 ? "平稳" : reframeOptions.tracking < 0.67 ? "适中" : "灵敏"}</b><i /></label>
+        <label className="inspector-toggle"><input type="checkbox" checked={reframeOptions.switchCanvas} onChange={(event) => setReframeOptions({ ...reframeOptions, switchCanvas: event.target.checked })} />同时把画布改为 9:16 竖屏</label>
+        <button className="primary" onClick={() => void runReframe()}>开始转换</button>
       </div>
     </section></div>}
 

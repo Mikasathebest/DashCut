@@ -10,9 +10,9 @@
   },
   "scripts": {
     "dev": "vinext dev",
-    "build": "vinext build",
+    "build": "node scripts/copy-vendor.mjs && vinext build",
     "start": "vinext start",
-    "test": "npm run build && node --experimental-strip-types --no-warnings --test tests/rendered-html.test.mjs tests/video-export.test.mjs tests/ai-api.test.mjs tests/captions.test.mjs tests/timeline-model.test.mjs tests/motion.test.mjs tests/project-file.test.mjs tests/transcript.test.mjs tests/agent-edits.test.mjs tests/agent-runtime.test.mjs tests/smart-edit.test.mjs tests/composition-export.test.mjs",
+    "test": "npm run build && node --experimental-strip-types --no-warnings --test tests/rendered-html.test.mjs tests/video-export.test.mjs tests/ai-api.test.mjs tests/captions.test.mjs tests/timeline-model.test.mjs tests/motion.test.mjs tests/reframe.test.mjs tests/health.test.mjs tests/project-file.test.mjs tests/transcript.test.mjs tests/agent-edits.test.mjs tests/agent-runtime.test.mjs tests/smart-edit.test.mjs tests/composition-export.test.mjs",
     "desktop": "npm run build && electron .",
     "desktop:smoke": "node electron/smoke-test.mjs",
     "runtime:build": "node scripts/build-local-runtime.mjs",
@@ -114,9 +114,9 @@
       "shortcutName": "DashCut 极剪"
     }
   },
-  "dependencies": {},
   "devDependencies": {
     "@cloudflare/vite-plugin": "1.37.1",
+    "@mediapipe/tasks-vision": "1.0.1",
     "@tailwindcss/postcss": "4.2.1",
     "@types/node": "22.19.19",
     "@types/react": "19.2.14",

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile, spawnSync } from "node:child_process";
-import { access, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { access, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
@@ -10,7 +10,7 @@ import test from "node:test";
 const require = createRequire(import.meta.url);
 const execFileAsync = promisify(execFile);
 const { resolveFfmpegExecutable } = require("../electron/video-export.cjs");
-const { atempoChain, buildCompositionGraph, clipDuration, exportComposition, keyframeExpression, keyframeValue } = require("../electron/composition-export.cjs");
+const { analyzeComposition, atempoChain, buildCompositionGraph, clipDuration, exportComposition, keyframeExpression, keyframeValue, normalizeOutput, parseEbur128Summary, parseLoudnormJson, parseSilences } = require("../electron/composition-export.cjs");
 const ffmpeg = resolveFfmpegExecutable();
 const ffmpegAvailable = spawnSync(ffmpeg, ["-hide_banner", "-version"], { windowsHide: true }).status === 0;
 
@@ -473,6 +473,208 @@ test("exports keyframes, wipes, volume keyframes and RGBA layers", { timeout: 30
       assert.ok(left[0] > 200 && left[2] < 60, `opaque half is red at ${t}s, got ${left}`);
       assert.ok(right[2] > 200 && right[0] < 60, `transparent half shows blue at ${t}s, got ${right}`);
     }
+  } finally {
+    await rm(work, { recursive: true, force: true });
+  }
+});
+
+test("normalises output settings and parses FFmpeg meters", () => {
+  assert.deepEqual(normalizeOutput(undefined), { format: "mp4", codec: "h264", loudnessTarget: null, gif: { fps: 12, width: 480, maxDuration: 15 } });
+  assert.equal(normalizeOutput({ format: "gif", codec: "h264", loudnessTarget: -14 }).loudnessTarget, null, "GIFs have no audio to normalise");
+  assert.equal(normalizeOutput({ format: "wav", codec: "hevc", loudnessTarget: -16 }).loudnessTarget, -16);
+  assert.equal(normalizeOutput({ format: "gif", codec: "h264", loudnessTarget: null, gif: { fps: 15, width: 321, maxDuration: 4 } }).gif.width, 322);
+
+  const loudnorm = `[Parsed_loudnorm_0 @ 0x1] \n{\n\t"input_i" : "-33.20",\n\t"input_tp" : "-29.98",\n\t"input_lra" : "0.00",\n\t"input_thresh" : "-43.20",\n\t"target_offset" : "-0.05"\n}\n`;
+  assert.deepEqual(parseLoudnormJson(loudnorm), { I: -33.2, TP: -29.98, LRA: 0, thresh: -43.2, offset: -0.05 });
+  assert.equal(parseLoudnormJson(loudnorm.replace('"-33.20"', '"-inf"')), null, "silence cannot be normalised");
+
+  const summary = "Summary:\n\n  Integrated loudness:\n    I:         -70.0 LUFS\n    Threshold:   0.0 LUFS\n\n  Loudness range:\n    LRA:         0.0 LU\n\n  True peak:\n    Peak:       -inf dBFS\n";
+  assert.deepEqual(parseEbur128Summary(summary), { integratedLufs: null, loudnessRange: 0, truePeak: null });
+  assert.deepEqual(parseEbur128Summary(summary.replace("-70.0", "-14.2").replace("-inf", "-1.6")), { integratedLufs: -14.2, loudnessRange: 0, truePeak: -1.6 });
+  assert.deepEqual(parseEbur128Summary(""), { integratedLufs: null, loudnessRange: null, truePeak: null });
+
+  assert.deepEqual(parseSilences("silence_start: 1.5\nsilence_end: 4.5 | silence_duration: 3\nsilence_start: 8\n", 10), [{ start: 1.5, end: 4.5 }, { start: 8, end: 10 }]);
+});
+
+test("graph renders only the audio mix for audio formats", () => {
+  const graph = buildCompositionGraph({
+    width: 640, height: 360, fps: 30, duration: 3,
+    visuals: [visual({ path: "/media/still.jpg", kind: "image", out: 3 }), visual({ path: "/media/a.mp4", out: 3, hasAudio: true })],
+    audios: [{ path: "/media/music.m4a", start: 0, in: 0, out: 3, speed: 1, audio: quietAudio }],
+  }, { audioOnly: true, audioFilters: ["loudnorm=I=-14", "aresample=48000"] });
+  assert.equal(graph.videoLabel, null);
+  assert.doesNotMatch(graph.inputs.join(" "), /still\.jpg/, "stills are not decoded for audio-only exports");
+  assert.doesNotMatch(graph.filterGraph, /color=c=black|overlay|\[vout\]/);
+  assert.match(graph.filterGraph, /\[0:a:0\].*\[va1\]/);
+  assert.match(graph.filterGraph, /\[1:a:0\].*\[aa0\]/);
+  assert.match(graph.filterGraph, /channel_layouts=stereo,loudnorm=I=-14,aresample=48000\[aout\]$/);
+});
+
+/** Small red clip with a 440 Hz tone and a tone-only music file. */
+async function makeFormatMedia(work) {
+  const red = path.join(work, "red.mp4");
+  const music = path.join(work, "music.m4a");
+  await ffmpegRun(["-f", "lavfi", "-i", "color=c=red:s=320x180:r=30:d=3", "-f", "lavfi", "-i", "sine=frequency=440:duration=3", "-shortest", "-c:v", "mpeg4", "-q:v", "2", "-pix_fmt", "yuv420p", "-c:a", "aac", red]);
+  await ffmpegRun(["-f", "lavfi", "-i", "sine=frequency=880:duration=3", "-c:a", "aac", music]);
+  return {
+    red,
+    request: (output, overrides = {}) => ({
+      output,
+      width: 320,
+      height: 180,
+      fps: 30,
+      platform: "youtube",
+      duration: 2,
+      visuals: [visual({ path: red, out: 3, hasAudio: true })],
+      audios: [{ path: music, start: 0.5, in: 0, out: 1.5, speed: 1, audio: quietAudio }],
+      subtitles: [{ start: 0, end: 1, zh: "格式", en: "Format" }],
+      subtitleStyle: {},
+      ...overrides,
+    }),
+  };
+}
+
+async function exists(file) {
+  return access(file).then(() => true, () => false);
+}
+
+test("exports HEVC MP4 with the hvc1 tag", { timeout: 120_000, skip: !ffmpegAvailable || process.platform !== "darwin" }, async () => {
+  const work = await mkdtemp(path.join(tmpdir(), "dashcut-composition-hevc-"));
+  try {
+    const media = await makeFormatMedia(work);
+    const output = path.join(work, "hevc.mp4");
+    const result = await exportComposition(media.request({ format: "mp4", codec: "hevc", loudnessTarget: null }), { outputPath: output, tempPath: work, ffmpegPath: ffmpeg, platform: process.platform });
+    assert.equal(result.subtitleFiles.length, 2);
+    assert.ok(await exists(path.join(work, "hevc.zh.srt")));
+    const { stderr, seconds } = await probe(output);
+    assert.match(stderr, /Video: hevc[^\n]*\(hvc1 \//);
+    assert.match(stderr, /Audio: aac.*48000 Hz, stereo/);
+    assert.ok(Math.abs(seconds - 2) <= 0.15, `expected ~2s, got ${seconds}`);
+    const { stderr: errors } = await execFileAsync(ffmpeg, ["-hide_banner", "-v", "error", "-i", output, "-f", "null", "-"]);
+    assert.equal(String(errors).trim(), "");
+  } finally {
+    await rm(work, { recursive: true, force: true });
+  }
+});
+
+test("exports the audio mix alone as M4A and WAV", { timeout: 120_000, skip: !ffmpegAvailable }, async () => {
+  const work = await mkdtemp(path.join(tmpdir(), "dashcut-composition-audio-"));
+  try {
+    const media = await makeFormatMedia(work);
+    for (const [format, codec] of [["m4a", /Audio: aac[^\n]*48000 Hz, stereo/], ["wav", /Audio: pcm_s16le[^\n]*48000 Hz, (2 channels|stereo)/]]) {
+      const output = path.join(work, `mix.${format}`);
+      const progress = [];
+      const result = await exportComposition(media.request({ format, codec: "h264", loudnessTarget: null }), {
+        outputPath: output, tempPath: work, ffmpegPath: ffmpeg, platform: process.platform,
+        onProgress: (item) => progress.push(item.progress),
+        prepareStill: async () => { throw new Error("audio exports must not prepare stills"); },
+      });
+      assert.deepEqual(result.subtitleFiles, []);
+      assert.equal(progress.at(-1), 100);
+      assert.equal(await exists(path.join(work, "mix.zh.srt")), false, "no caption sidecars for audio");
+      const { stderr, seconds } = await probe(output);
+      assert.match(stderr, codec);
+      assert.doesNotMatch(stderr, /Video:/);
+      assert.ok(Math.abs(seconds - 2) <= 0.1, `${format}: expected ~2s, got ${seconds}`);
+    }
+  } finally {
+    await rm(work, { recursive: true, force: true });
+  }
+});
+
+test("exports a palette GIF at the requested width, capped in length", { timeout: 120_000, skip: !ffmpegAvailable }, async () => {
+  const work = await mkdtemp(path.join(tmpdir(), "dashcut-composition-gif-"));
+  try {
+    const media = await makeFormatMedia(work);
+    const output = path.join(work, "clip.gif");
+    const result = await exportComposition(media.request({ format: "gif", codec: "h264", loudnessTarget: null, gif: { fps: 10, width: 160, maxDuration: 1.5 } }, { duration: 3 }), { outputPath: output, tempPath: work, ffmpegPath: ffmpeg, platform: process.platform });
+    assert.equal(result.duration, 1.5);
+    assert.deepEqual(result.subtitleFiles, []);
+    const { stderr, seconds } = await probe(output);
+    assert.match(stderr, /Video: gif[^\n]*160x90/);
+    assert.doesNotMatch(stderr, /Audio:/);
+    assert.ok(seconds <= 1.5 + 0.05 && seconds >= 1.3, `expected ≤1.5s, got ${seconds}`);
+    const { stderr: errors } = await execFileAsync(ffmpeg, ["-hide_banner", "-v", "error", "-i", output, "-f", "null", "-"]);
+    assert.equal(String(errors).trim(), "");
+    const frame = await frameAt(output, 1.2);
+    assert.ok(rgbAt(frame, 80, 20, 160)[0] > 180, "red picture survives palette quantisation");
+  } finally {
+    await rm(work, { recursive: true, force: true });
+  }
+});
+
+async function integratedLoudness(file) {
+  const { stderr } = await execFileAsync(ffmpeg, ["-hide_banner", "-i", file, "-map", "0:a", "-af", "ebur128=framelog=quiet", "-f", "null", "-"]);
+  return parseEbur128Summary(stderr).integratedLufs;
+}
+
+test("normalises a quiet mix to the loudness target in two passes", { timeout: 180_000, skip: !ffmpegAvailable }, async () => {
+  const work = await mkdtemp(path.join(tmpdir(), "dashcut-composition-loudness-"));
+  try {
+    const quiet = path.join(work, "quiet.wav");
+    // sine's default amplitude is 1/8 (-18 dBFS); -12 dB more gives a -30 dBFS tone.
+    await ffmpegRun(["-f", "lavfi", "-i", "sine=frequency=1000:duration=4:sample_rate=48000,volume=-12dB", "-c:a", "pcm_s16le", quiet]);
+    const before = await integratedLoudness(quiet);
+    assert.ok(before < -30, `source is quiet, got ${before}`);
+    const request = (format) => ({
+      output: { format, codec: "h264", loudnessTarget: -14 },
+      width: 320, height: 180, fps: 30, platform: "youtube", duration: 3,
+      visuals: [], audios: [{ path: quiet, start: 0, in: 0, out: 3, speed: 1, audio: quietAudio }],
+      subtitles: [], subtitleStyle: {},
+    });
+    for (const format of ["mp4", "wav"]) {
+      const output = path.join(work, `loud.${format}`);
+      const progress = [];
+      await exportComposition(request(format), { outputPath: output, tempPath: work, ffmpegPath: ffmpeg, platform: process.platform, onProgress: (item) => progress.push(item.progress) });
+      const after = await integratedLoudness(output);
+      assert.ok(Math.abs(after + 14) <= 1.5, `${format}: expected -14 ±1.5 LUFS, got ${after}`);
+      assert.ok(progress.includes(25), "render pass starts at 25 %");
+      assert.deepEqual(progress, [...progress].sort((a, b) => a - b), "progress never goes backwards");
+      assert.equal(progress.at(-1), 100);
+      const { stderr } = await probe(output);
+      assert.match(stderr, /Audio: [^\n]*48000 Hz/, "loudnorm's upsampling is undone");
+    }
+  } finally {
+    await rm(work, { recursive: true, force: true });
+  }
+});
+
+test("analyses loudness, silences and black frames without writing a file", { timeout: 180_000, skip: !ffmpegAvailable }, async () => {
+  const work = await mkdtemp(path.join(tmpdir(), "dashcut-composition-analysis-"));
+  try {
+    const red = path.join(work, "red.mp4");
+    const yellow = path.join(work, "yellow.mp4");
+    const tone = path.join(work, "tone.m4a");
+    await ffmpegRun(["-f", "lavfi", "-i", "color=c=red:s=320x180:r=30:d=4", "-c:v", "mpeg4", "-q:v", "2", "-pix_fmt", "yuv420p", red]);
+    await ffmpegRun(["-f", "lavfi", "-i", "color=c=yellow:s=320x180:r=30:d=4", "-c:v", "mpeg4", "-q:v", "2", "-pix_fmt", "yuv420p", yellow]);
+    await ffmpegRun(["-f", "lavfi", "-i", "sine=frequency=440:duration=3", "-c:a", "aac", tone]);
+    const toneClip = { path: tone, start: 0, in: 0, out: 1.5, speed: 1, audio: quietAudio };
+    const request = {
+      width: 640, height: 360, fps: 30, platform: "youtube", duration: 6,
+      // Picture: red 0-1.5 s, black 1.5-2.5 s, yellow 2.5-6 s. Audio: tone 0-1.5 s and 4.5-6 s.
+      visuals: [visual({ path: red, out: 1.5 }), visual({ path: yellow, start: 2.5, out: 3.5 })],
+      audios: [toneClip, { ...toneClip, start: 4.5 }],
+      subtitles: [{ start: 0, end: 6, zh: "字幕", en: "Caption" }], subtitleStyle: {},
+    };
+    const progress = [];
+    const before = new Set(await readdir(work));
+    const analysis = await analyzeComposition(request, { tempPath: work, ffmpegPath: ffmpeg, onProgress: (item) => progress.push(item.progress) });
+    assert.deepEqual(new Set(await readdir(work)), before, "no files left behind");
+    assert.equal(analysis.duration, 6);
+    assert.equal(progress.at(-1), 100);
+    assert.equal(analysis.blackFrames.length, 1, JSON.stringify(analysis.blackFrames));
+    assert.ok(Math.abs(analysis.blackFrames[0].start - 1.5) <= 0.2 && Math.abs(analysis.blackFrames[0].end - 2.5) <= 0.2, JSON.stringify(analysis.blackFrames));
+    assert.equal(analysis.silences.length, 1, JSON.stringify(analysis.silences));
+    assert.ok(Math.abs(analysis.silences[0].start - 1.5) <= 0.2 && Math.abs(analysis.silences[0].end - 4.5) <= 0.2, JSON.stringify(analysis.silences));
+    assert.equal(typeof analysis.integratedLufs, "number");
+    assert.ok(analysis.integratedLufs < -10 && analysis.integratedLufs > -40, `integrated ${analysis.integratedLufs}`);
+    assert.equal(typeof analysis.truePeak, "number");
+    assert.equal(typeof analysis.loudnessRange, "number");
+
+    const silent = await analyzeComposition({ ...request, audios: [] }, { tempPath: work, ffmpegPath: ffmpeg });
+    assert.equal(silent.integratedLufs, null);
+    assert.equal(silent.truePeak, null);
+    assert.deepEqual(silent.silences, [{ start: 0, end: 6 }]);
   } finally {
     await rm(work, { recursive: true, force: true });
   }
