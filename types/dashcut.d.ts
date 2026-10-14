@@ -6,6 +6,70 @@ declare global {
   type TimedSubtitle = { id: number; start: number; end: number; zh: string; en: string };
   type HardwareTier = "unsupported" | "minimum" | "recommended";
 
+  /*
+   * Multi-track composition contract shared by the editor preview and the FFmpeg exporter.
+   * All times are seconds. A clip occupies [start, start + (out - in) / speed) on the timeline.
+   * Visual layers are composited onto a black canvas in array order (first = bottom).
+   */
+  type AnimationType = "none" | "fade" | "slide-left" | "slide-right" | "slide-up" | "slide-down" | "zoom-in" | "zoom-out";
+  type VisualEffect = "bw" | "vintage" | "vignette" | "sharpen" | "denoise" | "beauty" | "blur" | "chroma-key";
+  type AudioEffect = "denoise" | "voice-enhance" | "loudnorm";
+  interface ClipAudioSettings {
+    volume: number; // 0..2, 1 = unchanged
+    fadeIn: number; // seconds
+    fadeOut: number; // seconds
+    muted: boolean;
+    effects: AudioEffect[];
+  }
+  interface CompositionVisual {
+    path: string;
+    kind: "video" | "image" | "gif";
+    start: number;
+    in: number; // source seconds; for images/GIFs the display range (GIFs loop from in)
+    out: number;
+    speed: number; // 0.1..10; images ignore it
+    reverse: boolean;
+    freezeAt: number | null; // video only: hold the source frame at this time for the whole clip
+    mirror: boolean; // horizontal flip, applied after crop
+    rotate90: 0 | 90 | 180 | 270; // clockwise, applied after mirror
+    crop: { x: number; y: number; w: number; h: number }; // normalized source rect, applied first
+    // The cropped/rotated frame is fit (contain) into the canvas, then scaled by `scale`,
+    // rotated `rotation` degrees clockwise about its centre, and centred at
+    // (W/2 + x*W, H/2 + y*H). Opacity 0..1.
+    transform: { x: number; y: number; scale: number; rotation: number; opacity: number };
+    // brightness -1..1 (0), contrast 0..2 (1), saturation 0..3 (1), temperature -1..1 (0, warm > 0).
+    adjust: { brightness: number; contrast: number; saturation: number; temperature: number };
+    effects: VisualEffect[];
+    chromaKey: { color: string; similarity: number }; // used when effects includes "chroma-key"
+    // In-animation runs over the first `duration` s, out-animation over the last `duration` s.
+    // p goes 0→1 (in) or 1→0 (out), linear. fade: opacity *= p. slide-*: offset by (1-p) canvas
+    // widths/heights from that side (slide-left enters from the left). zoom-in: scale *= 0.5+0.5p.
+    // zoom-out: scale *= 1.5-0.5p.
+    animationIn: { type: AnimationType; duration: number };
+    animationOut: { type: AnimationType; duration: number };
+    hasAudio: boolean;
+    audio: ClipAudioSettings;
+  }
+  interface CompositionAudio {
+    path: string;
+    start: number;
+    in: number;
+    out: number;
+    speed: number;
+    audio: ClipAudioSettings;
+  }
+  interface CompositionRequest {
+    width: number;
+    height: number;
+    fps: 30 | 60;
+    platform: "bilibili" | "youtube";
+    duration: number;
+    visuals: CompositionVisual[];
+    audios: CompositionAudio[];
+    subtitles: Array<{ start: number; end: number; zh: string; en: string }>;
+    subtitleStyle: Record<string, string | number>;
+  }
+
   interface HardwareProfile {
     platform: string;
     arch: string;
@@ -61,6 +125,12 @@ declare global {
         platform: "bilibili" | "youtube";
       }): Promise<{ canceled?: boolean; outputPath?: string; duration?: number; subtitleFiles?: string[] }>;
       revealExport(target: string): Promise<void>;
+      exportComposition(request: CompositionRequest): Promise<{ canceled?: boolean; outputPath?: string; duration?: number; subtitleFiles?: string[] }>;
+      extractWaveform(source: string): Promise<{ duration: number; peaksPerSecond: number; peaks: number[] }>;
+      detectScenes(source: string, range: { in: number; out: number }): Promise<number[]>;
+      detectSpeechSegments(source: string, range: { in: number; out: number }): Promise<{ speech: Array<{ start: number; end: number }>; silences: Array<{ start: number; end: number }> }>;
+      saveRecording(bytes: ArrayBuffer): Promise<string>;
+      requestMicrophone(): Promise<boolean>;
       onExportProgress(callback: (progress: { progress: number; stage: string }) => void): () => void;
       transcribeLocal(request: {
         clips: Array<{ id: number; path: string }>;

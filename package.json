@@ -12,7 +12,7 @@
     "dev": "vinext dev",
     "build": "vinext build",
     "start": "vinext start",
-    "test": "npm run build && node --test tests/rendered-html.test.mjs tests/video-export.test.mjs tests/AI API.test.mjs",
+    "test": "npm run build && node --experimental-strip-types --no-warnings --test tests/rendered-html.test.mjs tests/video-export.test.mjs tests/AI API.test.mjs tests/timeline-model.test.mjs tests/smart-edit.test.mjs tests/composition-export.test.mjs",
     "desktop": "npm run build && electron .",
     "desktop:smoke": "node electron/smoke-test.mjs",
     "runtime:build": "node scripts/build-local-runtime.mjs",
@@ -70,6 +70,9 @@
       "category": "public.app-category.video",
       "hardenedRuntime": true,
       "notarize": true,
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "DashCut 需要使用麦克风为视频录制旁白。"
+      },
       "target": [
         {
           "target": "dmg"

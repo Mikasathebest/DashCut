@@ -1,0 +1,427 @@
+// Pure project model and timeline operations shared by the editor UI and its tests.
+
+export type MediaKind = "video" | "image" | "gif" | "audio";
+
+export type Asset = {
+  id: string;
+  name: string;
+  kind: MediaKind;
+  url: string;
+  sourcePath: string;
+  duration: number; // natural length; stills use the default display length
+  width: number;
+  height: number;
+  hasAudio: boolean;
+  thumbnail: string;
+  frames: string[]; // filmstrip, evenly spaced across the duration
+  peaks: number[];
+  peaksPerSecond: number;
+};
+
+export type Track = { id: string; kind: "video" | "audio"; main: boolean; muted: boolean; hidden: boolean; locked: boolean };
+
+export type Clip = {
+  id: string;
+  assetId: string;
+  trackId: string;
+  start: number;
+  in: number;
+  out: number;
+  speed: number;
+  reverse: boolean;
+  freezeAt: number | null;
+  mirror: boolean;
+  rotate90: 0 | 90 | 180 | 270;
+  crop: { x: number; y: number; w: number; h: number };
+  transform: { x: number; y: number; scale: number; rotation: number; opacity: number };
+  adjust: { brightness: number; contrast: number; saturation: number; temperature: number };
+  effects: VisualEffect[];
+  chromaKey: { color: string; similarity: number };
+  animationIn: { type: AnimationType; duration: number };
+  animationOut: { type: AnimationType; duration: number };
+  audio: ClipAudioSettings;
+};
+
+export type Marker = { id: string; time: number };
+export type Subtitle = { id: number; start: number; end: number; zh: string; en: string };
+export type Project = { tracks: Track[]; clips: Clip[]; markers: Marker[]; subtitles: Subtitle[] };
+export type EditOptions = { magnet: boolean; linkage: boolean };
+
+export const defaultStillDuration = 3;
+export const minClipDuration = 0.1;
+
+let counter = 0;
+export function uid(prefix: string) {
+  counter += 1;
+  return `${prefix}-${Date.now().toString(36)}-${counter}`;
+}
+
+export function createProject(): Project {
+  return {
+    tracks: [
+      { id: "track-main", kind: "video", main: true, muted: false, hidden: false, locked: false },
+      { id: "track-audio", kind: "audio", main: false, muted: false, hidden: false, locked: false },
+    ],
+    clips: [],
+    markers: [],
+    subtitles: [],
+  };
+}
+
+export function defaultClipSettings(): Omit<Clip, "id" | "assetId" | "trackId" | "start" | "in" | "out"> {
+  return {
+    speed: 1,
+    reverse: false,
+    freezeAt: null,
+    mirror: false,
+    rotate90: 0,
+    crop: { x: 0, y: 0, w: 1, h: 1 },
+    transform: { x: 0, y: 0, scale: 1, rotation: 0, opacity: 1 },
+    adjust: { brightness: 0, contrast: 1, saturation: 1, temperature: 0 },
+    effects: [],
+    chromaKey: { color: "#00ff00", similarity: 0.3 },
+    animationIn: { type: "none", duration: 0.5 },
+    animationOut: { type: "none", duration: 0.5 },
+    audio: { volume: 1, fadeIn: 0, fadeOut: 0, muted: false, effects: [] },
+  };
+}
+
+export function clipDuration(clip: Clip) {
+  return (clip.out - clip.in) / clip.speed;
+}
+
+export function clipEnd(clip: Clip) {
+  return clip.start + clipDuration(clip);
+}
+
+export function projectDuration(project: Project) {
+  return project.clips.reduce((end, clip) => Math.max(end, clipEnd(clip)), 0);
+}
+
+export function mainTrack(project: Project) {
+  return project.tracks.find((track) => track.main)!;
+}
+
+export function trackClips(project: Project, trackId: string) {
+  return project.clips.filter((clip) => clip.trackId === trackId).sort((a, b) => a.start - b.start);
+}
+
+/** Stills, freeze frames and GIFs can be stretched freely; videos and audio are bounded by the source. */
+export function isStretchable(clip: Clip, asset: Asset | undefined) {
+  return clip.freezeAt !== null || asset?.kind === "image" || asset?.kind === "gif";
+}
+
+/** Maps a timeline time inside the clip to the source time that should be shown. */
+export function sourceTimeAt(clip: Clip, time: number) {
+  if (clip.freezeAt !== null) return clip.freezeAt;
+  const offset = Math.max(0, time - clip.start) * clip.speed;
+  return clip.reverse ? Math.max(clip.in, clip.out - offset) : Math.min(clip.out, clip.in + offset);
+}
+
+export function createClip(asset: Asset, trackId: string, start: number): Clip {
+  return { id: uid("clip"), assetId: asset.id, trackId, start, in: 0, out: asset.duration, ...defaultClipSettings() };
+}
+
+/** Packs the main track left-to-right without gaps, preserving order. */
+export function packMainTrack(project: Project): Project {
+  const main = mainTrack(project);
+  let cursor = 0;
+  const packed = new Map<string, number>();
+  for (const clip of trackClips(project, main.id)) {
+    packed.set(clip.id, cursor);
+    cursor += clipDuration(clip);
+  }
+  return { ...project, clips: project.clips.map((clip) => packed.has(clip.id) ? { ...clip, start: packed.get(clip.id)! } : clip) };
+}
+
+/** Shifts everything not on `exceptTrackId` that starts at or after `time`, plus subtitles. */
+export function rippleOthers(project: Project, exceptTrackId: string, time: number, delta: number): Project {
+  if (!delta) return project;
+  return {
+    ...project,
+    clips: project.clips.map((clip) => clip.trackId !== exceptTrackId && clip.start >= time - 0.001 ? { ...clip, start: Math.max(0, clip.start + delta) } : clip),
+    markers: project.markers.map((marker) => marker.time >= time - 0.001 ? { ...marker, time: Math.max(0, marker.time + delta) } : marker),
+    subtitles: project.subtitles.map((item) => item.start >= time - 0.001 ? { ...item, start: Math.max(0, item.start + delta), end: Math.max(0, item.end + delta) } : item),
+  };
+}
+
+/**
+ * Re-packs the main track after an edit and, with linkage on, moves attached items by the
+ * same amount the main track moved at `time`.
+ */
+export function settle(before: Project, after: Project, options: EditOptions, time: number): Project {
+  if (!options.magnet) return after;
+  const packed = packMainTrack(after);
+  if (!options.linkage) return packed;
+  const main = mainTrack(packed).id;
+  return rippleOthers(packed, main, time, mainLength(packed, main) - mainLength(before, main));
+}
+
+function mainLength(project: Project, mainId: string) {
+  return project.clips.reduce((sum, clip) => clip.trackId === mainId ? sum + clipDuration(clip) : sum, 0);
+}
+
+function isMainClip(project: Project, clip: Clip) {
+  return project.tracks.some((track) => track.id === clip.trackId && track.main);
+}
+
+export function clipAt(project: Project, trackId: string, time: number) {
+  return project.clips.find((clip) => clip.trackId === trackId && time >= clip.start && time < clipEnd(clip));
+}
+
+export function splitClip(project: Project, clipId: string, time: number): { project: Project; rightId: string | null } {
+  const clip = project.clips.find((item) => item.id === clipId);
+  if (!clip || time <= clip.start + minClipDuration || time >= clipEnd(clip) - minClipDuration) return { project, rightId: null };
+  const elapsed = (time - clip.start) * clip.speed;
+  const rightId = uid("clip");
+  let left: Clip;
+  let right: Clip;
+  if (clip.reverse) {
+    const cut = clip.out - elapsed;
+    left = { ...clip, in: cut };
+    right = { ...clip, id: rightId, start: time, out: cut };
+  } else {
+    const cut = clip.in + elapsed;
+    left = { ...clip, out: cut };
+    right = { ...clip, id: rightId, start: time, in: cut };
+  }
+  // Animations belong to the outer edges of the original clip.
+  left = { ...left, animationOut: { ...left.animationOut, type: "none" } };
+  right = { ...right, animationIn: { ...right.animationIn, type: "none" } };
+  return { project: { ...project, clips: project.clips.flatMap((item) => item.id === clipId ? [left, right] : [item]) }, rightId };
+}
+
+/** Removes the part of a clip before (`side = "left"`) or after the given time. */
+export function trimAt(project: Project, clipId: string, time: number, side: "left" | "right", options: EditOptions): Project {
+  const clip = project.clips.find((item) => item.id === clipId);
+  if (!clip || time <= clip.start + minClipDuration / 2 || time >= clipEnd(clip) - minClipDuration / 2) return project;
+  const elapsed = (time - clip.start) * clip.speed;
+  let next: Clip;
+  if (side === "left") {
+    next = clip.reverse ? { ...clip, out: clip.out - elapsed, start: time } : { ...clip, in: clip.in + elapsed, start: time };
+  } else {
+    next = clip.reverse ? { ...clip, in: clip.out - elapsed } : { ...clip, out: clip.in + elapsed };
+  }
+  const after = { ...project, clips: project.clips.map((item) => item.id === clipId ? next : item) };
+  // Left trims move the kept content, so attachments from the cut onwards follow it.
+  return settle(project, after, options, side === "left" ? time : clipEnd(clip));
+}
+
+export function deleteClips(project: Project, clipIds: string[], options: EditOptions): Project {
+  const removed = project.clips.filter((clip) => clipIds.includes(clip.id));
+  if (!removed.length) return project;
+  const after = { ...project, clips: project.clips.filter((clip) => !clipIds.includes(clip.id)) };
+  return settle(project, after, options, Math.min(...removed.map((clip) => clipEnd(clip))));
+}
+
+export function updateClip(project: Project, clipId: string, patch: Partial<Clip>, options: EditOptions): Project {
+  const clip = project.clips.find((item) => item.id === clipId);
+  if (!clip) return project;
+  const after = { ...project, clips: project.clips.map((item) => item.id === clipId ? { ...item, ...patch } : item) };
+  const timingChanged = ["in", "out", "speed", "start"].some((key) => key in patch);
+  if (!timingChanged) return after;
+  // A left-edge trim moves the remaining content; everything else changes length at the old end.
+  const next = after.clips.find((item) => item.id === clipId)!;
+  const leftTrim = next.start !== clip.start && next.speed === clip.speed;
+  return settle(project, after, options, leftTrim ? Math.max(clip.start, next.start) : clipEnd(clip));
+}
+
+/** Inserts a held frame at `time` inside a video clip, splitting it around the freeze. */
+export function freezeFrame(project: Project, clipId: string, time: number, length: number, options: EditOptions): { project: Project; freezeId: string | null } {
+  const clip = project.clips.find((item) => item.id === clipId);
+  if (!clip || clip.freezeAt !== null) return { project, freezeId: null };
+  const frameTime = sourceTimeAt(clip, time);
+  const split = time > clip.start + minClipDuration && time < clipEnd(clip) - minClipDuration ? splitClip(project, clipId, time) : { project, rightId: null };
+  const freezeStart = split.rightId ? time : time >= clipEnd(clip) - minClipDuration ? clipEnd(clip) : clip.start;
+  const freeze: Clip = { ...clip, id: uid("clip"), start: freezeStart, in: 0, out: length, speed: 1, reverse: false, freezeAt: frameTime, animationIn: { ...clip.animationIn, type: "none" }, animationOut: { ...clip.animationOut, type: "none" } };
+  // Make room on the clip's own track, then let the main track settle.
+  const shifted = split.project.clips.map((item) => item.trackId === clip.trackId && item.start >= freezeStart - 0.001 ? { ...item, start: item.start + length } : item);
+  let next: Project = { ...split.project, clips: [...shifted, freeze] };
+  if (options.linkage && isMainClip(project, clip)) next = rippleOthers(next, clip.trackId, freezeStart, length);
+  return { project: options.magnet ? packMainTrack(next) : next, freezeId: freeze.id };
+}
+
+/** Replaces a clip with several source ranges laid end to end (smart cuts). */
+export function replaceWithRanges(project: Project, clipId: string, ranges: Array<{ start: number; end: number }>, options: EditOptions): Project {
+  const clip = project.clips.find((item) => item.id === clipId);
+  if (!clip || !ranges.length) return project;
+  let cursor = clip.start;
+  const pieces = ranges.map((range, index) => {
+    const piece: Clip = {
+      ...clip,
+      id: index === 0 ? clip.id : uid("clip"),
+      start: cursor,
+      in: range.start,
+      out: range.end,
+      reverse: false,
+      animationIn: index === 0 ? clip.animationIn : { ...clip.animationIn, type: "none" },
+      animationOut: index === ranges.length - 1 ? clip.animationOut : { ...clip.animationOut, type: "none" },
+    };
+    cursor += clipDuration(piece);
+    return piece;
+  });
+  const delta = cursor - clipEnd(clip);
+  const shifted = project.clips.flatMap((item) => item.id === clipId ? pieces : item.trackId === clip.trackId && item.start >= clipEnd(clip) - 0.001 ? [{ ...item, start: item.start + delta }] : [item]);
+  let next: Project = { ...project, clips: shifted };
+  if (options.linkage && isMainClip(project, clip)) next = rippleOthers(next, clip.trackId, clipEnd(clip), delta);
+  return options.magnet ? packMainTrack(next) : next;
+}
+
+/** Splits a clip at several source times (scene cuts). Returns the new project. */
+export function splitAtSourceTimes(project: Project, clipId: string, sourceTimes: number[]) {
+  const clip = project.clips.find((item) => item.id === clipId);
+  if (!clip) return project;
+  const timelineTimes = sourceTimes
+    .map((source) => clip.start + (clip.reverse ? clip.out - source : source - clip.in) / clip.speed)
+    .sort((a, b) => b - a);
+  let next = project;
+  // Split from the right so the left piece keeps the original id for the next cut.
+  for (const time of timelineTimes) next = splitClip(next, clipId, time).project;
+  return next;
+}
+
+export function hasRoom(project: Project, trackId: string, start: number, duration: number, ignoreId?: string) {
+  return !project.clips.some((clip) => clip.trackId === trackId && clip.id !== ignoreId && start < clipEnd(clip) - 0.001 && start + duration > clip.start + 0.001);
+}
+
+/** Places (or moves) a clip; on the magnetic main track it is inserted at the nearest boundary. */
+export function placeClip(project: Project, clip: Clip, trackId: string, start: number, options: EditOptions): Project {
+  const track = project.tracks.find((item) => item.id === trackId)!;
+  const others = project.clips.filter((item) => item.id !== clip.id);
+  if (track.main && options.magnet) {
+    const wasOnMain = project.clips.some((item) => item.id === clip.id && item.trackId === trackId);
+    const mainClips = packMainTrack({ ...project, clips: others }).clips.filter((item) => item.trackId === trackId).sort((a, b) => a.start - b.start);
+    // Insert before the first clip whose midpoint lies after the drop position.
+    const index = mainClips.findIndex((item) => start < item.start + clipDuration(item) / 2);
+    const insertAt = index === -1 ? mainClips.reduce((end, item) => Math.max(end, clipEnd(item)), 0) : mainClips[index].start;
+    // A start just before the neighbour makes the packer order the inserted clip first.
+    const packed = packMainTrack({ ...project, clips: [...others.map((item) => mainClips.find((main) => main.id === item.id) ?? item), { ...clip, trackId, start: insertAt - 0.0005 }] });
+    return options.linkage && !wasOnMain ? rippleOthers(packed, trackId, insertAt, clipDuration(clip)) : packed;
+  }
+  const placed = { ...clip, trackId, start: Math.max(0, start) };
+  const after = { ...project, clips: [...others, placed] };
+  // Leaving the main track closes the gap there without dragging attached items along.
+  const wasMain = project.clips.some((item) => item.id === clip.id && isMainClip(project, item));
+  return wasMain && options.magnet ? packMainTrack(after) : after;
+}
+
+export function addTrack(project: Project, kind: "video" | "audio", position: "top" | "bottom"): { project: Project; trackId: string } {
+  const track: Track = { id: uid("track"), kind, main: false, muted: false, hidden: false, locked: false };
+  const tracks = position === "top" ? [track, ...project.tracks] : [...project.tracks, track];
+  return { project: { ...project, tracks: normalizeTrackOrder(tracks) }, trackId: track.id };
+}
+
+/** Video tracks always sit above audio tracks so the main track separates overlays from sound. */
+export function normalizeTrackOrder(tracks: Track[]) {
+  return [...tracks.filter((track) => track.kind === "video"), ...tracks.filter((track) => track.kind === "audio")];
+}
+
+/** Drops empty non-main tracks so dragging clips away does not leave blank rows behind. */
+export function pruneTracks(project: Project): Project {
+  const used = new Set(project.clips.map((clip) => clip.trackId));
+  const firstAudio = project.tracks.find((track) => track.kind === "audio");
+  const tracks = project.tracks.filter((track) => track.main || track === firstAudio || used.has(track.id));
+  return tracks.length === project.tracks.length ? project : { ...project, tracks };
+}
+
+/** Snaps `time` to the nearest candidate within `threshold` seconds. */
+export function snapTime(time: number, candidates: number[], threshold: number) {
+  let best = time;
+  let distance = threshold;
+  for (const candidate of candidates) {
+    const gap = Math.abs(candidate - time);
+    if (gap < distance) {
+      best = candidate;
+      distance = gap;
+    }
+  }
+  return best;
+}
+
+export function snapCandidates(project: Project, playhead: number, ignoreId?: string) {
+  return [0, playhead, ...project.markers.map((marker) => marker.time), ...project.clips.filter((clip) => clip.id !== ignoreId).flatMap((clip) => [clip.start, clipEnd(clip)])];
+}
+
+/** Evaluates transform and opacity including in/out animations, matching the exporter. */
+export function evaluateVisual(clip: Clip, time: number) {
+  let { x, y, scale, opacity } = clip.transform;
+  const local = time - clip.start;
+  const length = clipDuration(clip);
+  const apply = (type: AnimationType, p: number) => {
+    if (type === "fade") opacity *= p;
+    if (type === "slide-left") x -= 1 - p;
+    if (type === "slide-right") x += 1 - p;
+    if (type === "slide-up") y -= 1 - p;
+    if (type === "slide-down") y += 1 - p;
+    if (type === "zoom-in") scale *= 0.5 + 0.5 * p;
+    if (type === "zoom-out") scale *= 1.5 - 0.5 * p;
+  };
+  const inLength = Math.min(clip.animationIn.duration, length);
+  const outLength = Math.min(clip.animationOut.duration, length);
+  if (clip.animationIn.type !== "none" && local < inLength) apply(clip.animationIn.type, Math.max(0, local / inLength));
+  if (clip.animationOut.type !== "none" && local > length - outLength) apply(clip.animationOut.type, Math.max(0, (length - local) / outLength));
+  return { x, y, scale, rotation: clip.transform.rotation, opacity: Math.max(0, Math.min(1, opacity)) };
+}
+
+/** Volume after fades at a timeline time. */
+export function evaluateVolume(clip: Clip, time: number) {
+  if (clip.audio.muted) return 0;
+  const local = time - clip.start;
+  const length = clipDuration(clip);
+  let gain = clip.audio.volume;
+  if (clip.audio.fadeIn > 0 && local < clip.audio.fadeIn) gain *= Math.max(0, local / clip.audio.fadeIn);
+  if (clip.audio.fadeOut > 0 && local > length - clip.audio.fadeOut) gain *= Math.max(0, (length - local) / clip.audio.fadeOut);
+  return gain;
+}
+
+export function canvasSize(ratio: "16:9" | "9:16", resolution: 720 | 1080 | 2160) {
+  const long = Math.round((resolution * 16) / 9);
+  return ratio === "16:9" ? { width: long, height: resolution } : { width: resolution, height: long };
+}
+
+/** Flattens the project into the exporter contract (visual layers bottom → top). */
+export function toComposition(project: Project, assets: Asset[], settings: { ratio: "16:9" | "9:16"; resolution: 720 | 1080 | 2160; fps: 30 | 60; platform: "bilibili" | "youtube"; subtitleStyle: Record<string, string | number> }): CompositionRequest {
+  const byId = new Map(assets.map((asset) => [asset.id, asset]));
+  const { width, height } = canvasSize(settings.ratio, settings.resolution);
+  const videoTracks = project.tracks.filter((track) => track.kind === "video" && !track.hidden).reverse();
+  const visuals: CompositionVisual[] = videoTracks.flatMap((track) => trackClips(project, track.id).flatMap((clip) => {
+    const asset = byId.get(clip.assetId);
+    if (!asset || asset.kind === "audio") return [];
+    return [{
+      path: asset.sourcePath,
+      kind: asset.kind,
+      start: clip.start,
+      in: clip.in,
+      out: clip.out,
+      speed: asset.kind === "image" ? 1 : clip.speed,
+      reverse: clip.reverse,
+      freezeAt: clip.freezeAt,
+      mirror: clip.mirror,
+      rotate90: clip.rotate90,
+      crop: clip.crop,
+      transform: clip.transform,
+      adjust: clip.adjust,
+      effects: clip.effects,
+      chromaKey: clip.chromaKey,
+      animationIn: clip.animationIn,
+      animationOut: clip.animationOut,
+      hasAudio: asset.kind === "video" && asset.hasAudio && clip.freezeAt === null && !track.muted,
+      audio: clip.audio,
+    }];
+  }));
+  const audios: CompositionAudio[] = project.tracks.filter((track) => track.kind === "audio" && !track.muted).flatMap((track) => trackClips(project, track.id).flatMap((clip) => {
+    const asset = byId.get(clip.assetId);
+    if (!asset || !asset.hasAudio) return [];
+    return [{ path: asset.sourcePath, start: clip.start, in: clip.in, out: clip.out, speed: clip.speed, audio: clip.audio }];
+  }));
+  return { width, height, fps: settings.fps, platform: settings.platform, duration: projectDuration(project), visuals, audios, subtitles: project.subtitles, subtitleStyle: settings.subtitleStyle };
+}
+
+/** Maps a source-time range of a clip's asset onto the timeline, or null when it falls outside the clip. */
+export function sourceRangeToTimeline(clip: Clip, sourceStart: number, sourceEnd: number) {
+  if (clip.freezeAt !== null || clip.reverse) return null;
+  const start = Math.max(sourceStart, clip.in);
+  const end = Math.min(sourceEnd, clip.out);
+  if (end <= start) return null;
+  return { start: clip.start + (start - clip.in) / clip.speed, end: clip.start + (end - clip.in) / clip.speed, sourceStart: start, sourceEnd: end };
+}

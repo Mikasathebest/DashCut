@@ -26,14 +26,14 @@ test("server-renders the DashCut editor", async () => {
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
   const html = await response.text();
-  assert.match(html, /<title>DashCut 极剪 — 双语智能视频编辑器<\/title>/i);
+  assert.match(html, /<title>DashCut 极剪<\/title>/i);
+  assert.doesNotMatch(html, /双语智能视频编辑器/);
   assert.match(html, /自动字幕/);
-  assert.match(html, /中英双语/);
   assert.match(html, /导出视频/);
   assert.match(html, /分割/);
   assert.match(html, /城市漫游/);
-  assert.match(html, /云端模型/);
-  assert.match(html, /本地模型/);
+  // Left media library, centre preview, right inspector tabs and the timeline toolbar.
+  for (const label of ["导入素材", "画面", "音频", "变速", "动画", "调整", "AI 效果", "主轨", "封面", "智能剪口播", "智能镜头分割", "主轨磁吸", "预览轴", "录音"]) assert.match(html, new RegExp(label));
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape/);
 });
 
@@ -46,7 +46,7 @@ test("ships product metadata and removes the starter preview", async () => {
   assert.match(page, /DashCut/);
   assert.match(page, /关于与许可/);
   assert.match(page, /FFmpeg 9\.0\.1/);
-  assert.match(page, /accept="video\/\*,image\/\*"/);
+  assert.match(page, /accept="video\/\*,image\/\*,audio\/\*"/);
   assert.match(page, /exportFps/);
   assert.match(layout, /og\.png/);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);

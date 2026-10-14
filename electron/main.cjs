@@ -1,13 +1,15 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
-const { app, BrowserWindow, dialog, ipcMain, nativeImage, shell } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, nativeImage, shell, systemPreferences } = require("electron");
 const { existsSync } = require("node:fs");
-const { writeFile } = require("node:fs/promises");
+const { mkdir, writeFile } = require("node:fs/promises");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 const { getHardwareProfile } = require("./hardware.cjs");
 const { transcribeLocal } = require("./local-transcription.cjs");
 const { getModels, getRuntimeStatus, installModel, removeModel } = require("./model-manager.cjs");
 const { exportVideo } = require("./video-export.cjs");
+const { exportComposition } = require("./composition-export.cjs");
+const { detectScenes, detectSpeechSegments, extractWaveform } = require("./smart-edit.cjs");
 const { listHubModels, translateSubtitles, transcribeHub } = require("./AI API.cjs");
 
 let desktopServer;
@@ -72,6 +74,37 @@ ipcMain.handle("export:video", async (event, request) => {
     prepareStill: prepareStillImage,
     onProgress: (progress) => event.sender.send("export:progress", progress),
   });
+});
+ipcMain.handle("export:composition", async (event, request) => {
+  // Automated end-to-end runs pass the destination instead of driving the native dialog.
+  const result = process.env.DASHCUT_EXPORT_PATH ? { canceled: false, filePath: process.env.DASHCUT_EXPORT_PATH } : await dialog.showSaveDialog({
+    title: "导出视频",
+    defaultPath: "DashCut-export.mp4",
+    filters: [{ name: "MP4 Video", extensions: ["mp4"] }],
+  });
+  if (result.canceled || !result.filePath) return { canceled: true };
+  return exportComposition(request, {
+    outputPath: result.filePath,
+    tempPath: app.getPath("temp"),
+    ffmpegPath: mediaRuntimePath(),
+    platform: process.platform,
+    prepareStill: prepareStillImage,
+    onProgress: (progress) => event.sender.send("export:progress", progress),
+  });
+});
+ipcMain.handle("media:waveform", (_event, source) => extractWaveform(source, { ffmpegPath: mediaRuntimePath() }));
+ipcMain.handle("smart:scenes", (_event, source, range) => detectScenes(source, { ...range, ffmpegPath: mediaRuntimePath() }));
+ipcMain.handle("smart:speech", (_event, source, range) => detectSpeechSegments(source, { ...range, ffmpegPath: mediaRuntimePath() }));
+ipcMain.handle("recording:save", async (_event, bytes) => {
+  const folder = path.join(app.getPath("userData"), "recordings");
+  await mkdir(folder, { recursive: true });
+  const target = path.join(folder, `recording-${Date.now()}.webm`);
+  await writeFile(target, Buffer.from(bytes));
+  return target;
+});
+ipcMain.handle("media:microphone", async () => {
+  if (process.platform !== "darwin") return true;
+  return systemPreferences.getMediaAccessStatus("microphone") === "granted" || systemPreferences.askForMediaAccess("microphone");
 });
 ipcMain.handle("export:reveal", (_event, target) => {
   if (typeof target === "string" && path.isAbsolute(target)) shell.showItemInFolder(target);

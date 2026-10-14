@@ -15,6 +15,12 @@ contextBridge.exposeInMainWorld("dashCutDesktop", {
   transcribeHub: (request) => ipcRenderer.invoke("hub:transcribe", request),
   exportVideo: (request) => ipcRenderer.invoke("export:video", request),
   revealExport: (target) => ipcRenderer.invoke("export:reveal", target),
+  exportComposition: (request) => ipcRenderer.invoke("export:composition", request),
+  extractWaveform: (source) => ipcRenderer.invoke("media:waveform", source),
+  detectScenes: (source, range) => ipcRenderer.invoke("smart:scenes", source, range),
+  detectSpeechSegments: (source, range) => ipcRenderer.invoke("smart:speech", source, range),
+  saveRecording: (bytes) => ipcRenderer.invoke("recording:save", bytes),
+  requestMicrophone: () => ipcRenderer.invoke("media:microphone"),
   onExportProgress: (callback) => {
     const listener = (_event, progress) => callback(progress);
     ipcRenderer.on("export:progress", listener);
