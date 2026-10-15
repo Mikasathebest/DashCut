@@ -16,7 +16,7 @@ import {
   cutSourceRanges, mainTrack, placeClip, Project, projectDuration, pruneTracks, sourceRangeToTimeline, sourceTimeAt, splitAtSourceTimes, splitClip,
   Subtitle, TextLayer, TimedWord, toComposition, canvasSize, trackClips, Transcript, trimAt, uid, updateClip, createProject,
 } from "./editor/model";
-import { defaultSubtitleStyle, normalizeSubtitleStyle, retimeSubtitle, shiftSubtitles, SubtitleStyle } from "./editor/captions";
+import { bestAudioModel, defaultSubtitleStyle, normalizeSubtitleStyle, retimeSubtitle, shiftSubtitles, SubtitleStyle } from "./editor/captions";
 import { CaptionStyleEditor, CaptionTimingBar } from "./editor/CaptionTools";
 import { applyAgentEdits, AgentContext, AgentOp, cleanCutCandidates, findSegments, getCaptions, getTranscript, serializeTimeline, buildAliases } from "./editor/agent";
 import { AgentMessage, AgentPanel } from "./editor/AgentPanel";
@@ -32,7 +32,7 @@ type MediaFilter = "all" | "video" | "image" | "audio";
 type RecognitionEngine = "cloud" | "local";
 type History = { past: Project[]; present: Project; future: Project[]; key: string; at: number; revision: number };
 
-// Endpoint and model are remembered between sessions; the API key never is.
+// Endpoint and model are remembered in localStorage; the API key is kept encrypted by the main process.
 const aiSettingsKey = "dashcut.ai-settings";
 function savedAiSettings() {
   try {
@@ -144,6 +144,8 @@ export default function Home() {
   const [aiConfig, setAiConfig] = useState<AiConfig>({ baseUrl: "", apiKey: "", model: "" });
   const [aiModels, setAiModels] = useState<AiModel[]>([]);
   const [loadingAiModels, setLoadingAiModels] = useState(false);
+  const [aiKeyLoaded, setAiKeyLoaded] = useState(false);
+  const [showAiKey, setShowAiKey] = useState(false);
   const [captionProgress, setCaptionProgress] = useState<{ progress: number; stage: string } | null>(null);
   const [selectedSubtitle, setSelectedSubtitle] = useState<number | null>(null);
   const [hotwords, setHotwords] = useState("");
@@ -221,7 +223,25 @@ export default function Home() {
     // Restored after mount so server and client render the same initial markup.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setAiConfig((config) => ({ ...config, ...saved }));
+    void window.dashCutDesktop?.savedAiKey?.().then((apiKey) => {
+      if (apiKey) setAiConfig((config) => ({ ...config, apiKey }));
+      setAiKeyLoaded(true);
+    }).catch(() => setAiKeyLoaded(true));
   }, []);
+
+  useEffect(() => {
+    if (!aiKeyLoaded) return;
+    const timer = window.setTimeout(() => void window.dashCutDesktop?.saveAiKey?.(aiConfig.apiKey).catch(() => undefined), 500);
+    return () => window.clearTimeout(timer);
+  }, [aiConfig.apiKey, aiKeyLoaded]);
+
+  // With a remembered endpoint and key but no model yet, look the models up once and pick the best.
+  const autoModelTried = useRef(false);
+  useEffect(() => {
+    if (!aiKeyLoaded || autoModelTried.current || aiConfig.model || !aiConfig.baseUrl.trim() || !aiConfig.apiKey.trim()) return;
+    autoModelTried.current = true;
+    void refreshAiModels();
+  });
 
   useEffect(() => {
     try { localStorage.setItem(aiSettingsKey, JSON.stringify({ baseUrl: aiConfig.baseUrl, model: aiConfig.model })); }
@@ -872,7 +892,11 @@ export default function Home() {
     try {
       const models = await window.dashCutDesktop.listAiModels(aiConfig);
       setAiModels(models);
-      setToast(`已查询 ${models.length} 个模型；云端识别需选择支持音频输入的模型`);
+      const best = bestAudioModel(models);
+      if (best) {
+        setAiConfig((config) => ({ ...config, model: best }));
+        setToast(t("已查询 {count} 个模型，已自动选择识别效果最好的 {model}", { count: models.length, model: best }));
+      } else setToast(t("已查询 {count} 个模型，但没有找到支持音频输入的 Gemini 模型，请手动选择", { count: models.length }));
     } catch (error) { setToast(error instanceof Error ? error.message : "模型查询失败"); }
     finally { setLoadingAiModels(false); }
   }
@@ -1517,11 +1541,11 @@ export default function Home() {
     commandRef.current = (command: string) => {
       const typing = isTyping(document.activeElement);
       if (["copy", "cut", "paste", "duplicate"].includes(command)) {
-        if (typing) return void document.execCommand(command === "duplicate" ? "copy" : command);
+        if (typing) return void window.dashCutDesktop?.nativeEdit(command === "duplicate" ? "copy" : command as "copy" | "cut" | "paste");
         return clipboardCommand(command as "copy" | "cut" | "paste" | "duplicate");
       }
       if (command === "undo" || command === "redo") {
-        if (typing) return void document.execCommand(command);
+        if (typing) return void window.dashCutDesktop?.nativeEdit(command);
         return command === "undo" ? undo() : redo();
       }
       if (command === "new") return void newProject();
@@ -1563,7 +1587,7 @@ export default function Home() {
     <details className="ai-settings" open={!aiConfig.baseUrl || !aiConfig.model}>
       <summary>API 设置{aiConfig.model ? ` · ${aiConfig.model}` : ""}</summary>
       <label>API Base URL<input value={aiConfig.baseUrl} placeholder="https://…/v1" disabled={isGenerating || loadingAiModels} onChange={(event) => { setAiModels([]); setAiConfig({ ...aiConfig, baseUrl: event.target.value }); }} /></label>
-      <label>API Key<input type="password" autoComplete="off" value={aiConfig.apiKey} disabled={isGenerating || loadingAiModels} onChange={(event) => setAiConfig({ ...aiConfig, apiKey: event.target.value })} placeholder="仅本次会话使用，不保存到磁盘" /></label>
+      <label>API Key<span className="model-picker"><input type={showAiKey ? "text" : "password"} autoComplete="off" spellCheck={false} value={aiConfig.apiKey} disabled={isGenerating || loadingAiModels} onChange={(event) => setAiConfig({ ...aiConfig, apiKey: event.target.value })} placeholder={t("加密保存在本机钥匙串，下次自动填入")} /><button className="ghost-action" type="button" onClick={() => setShowAiKey(!showAiKey)}>{showAiKey ? t("隐藏") : t("显示")}</button></span></label>
       <label>模型<span className="model-picker"><input list="ai-models" value={aiConfig.model} placeholder="选择或输入模型 ID" disabled={isGenerating} onChange={(event) => setAiConfig({ ...aiConfig, model: event.target.value })} /><button className="ghost-action" disabled={loadingAiModels || isGenerating} onClick={() => void refreshAiModels()}>{loadingAiModels ? "查询中…" : aiModels.length ? `刷新 (${aiModels.length})` : "查询"}</button></span><datalist id="ai-models">{aiModels.map((model) => <option key={model.id} value={model.id} />)}</datalist></label>
       {recognitionEngine === "local" && <label className="ai-checkbox"><input type="checkbox" checked={autoTranslate} disabled={isGenerating} onChange={(event) => setAutoTranslate(event.target.checked)} />识别后自动生成中英译文</label>}
       <small>{recognitionEngine === "cloud" ? "云端识别会上传音轨，需选择支持音频输入的模型。" : autoTranslate ? "本地识别后仅将字幕文本发送到接口翻译。" : "关闭自动翻译时，本地识别完全离线。"}</small>

@@ -12,6 +12,7 @@ const { analyzeComposition, exportComposition } = require("./composition-export.
 const { detectScenes, detectSpeechSegments, extractWaveform } = require("./smart-edit.cjs");
 const { handleMediaScheme, registerMediaScheme } = require("./media-protocol.cjs");
 const { createAgentHost } = require("./agent-host.cjs");
+const { createKeyStore } = require("./agent-keys.cjs");
 const { setLanguage, tr } = require("./i18n.cjs");
 const { createAutosave, createRecentList, findSiblings, loadProject, saveProject } = require("./project-store.cjs");
 
@@ -72,6 +73,19 @@ ipcMain.handle("transcription:local", (event, request) => {
 // Network calls go through Chromium (net.fetch) so system proxies and certificates apply.
 const proxyAwareFetch = (...args) => net.fetch(...args);
 ipcMain.handle("ai:models", (_event, config) => listModels(config, { fetchImpl: proxyAwareFetch }));
+// Caption API key: encrypted with safeStorage (OS keychain) so it survives restarts; created lazily because safeStorage needs app ready.
+let captionKeys = null;
+const captionKeyStore = () => captionKeys ??= createKeyStore({ file: path.join(app.getPath("userData"), "caption-keys.json"), safeStorage });
+ipcMain.handle("ai:saved-key", () => captionKeyStore().get("captions") || "");
+ipcMain.handle("ai:save-key", (_event, key) => {
+  if (typeof key === "string" && key.trim()) return captionKeyStore().set("captions", key);
+  captionKeyStore().clear("captions");
+  return { persisted: false };
+});
+// Text fields use Chromium's native clipboard; document.execCommand("paste") is blocked for page content.
+ipcMain.handle("edit:native", (event, command) => {
+  if (["copy", "cut", "paste", "undo", "redo", "selectAll"].includes(command)) event.sender[command]();
+});
 ipcMain.handle("ai:translate", (event, request) => translateSubtitles(request, { onProgress: captionProgress(event), fetchImpl: proxyAwareFetch }));
 ipcMain.handle("ai:transcribe", (event, request) => transcribeCloud(request, {
   tempPath: app.getPath("temp"), ffmpegPath: mediaRuntimePath(), onProgress: captionProgress(event), fetchImpl: proxyAwareFetch,
