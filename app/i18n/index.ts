@@ -1,12 +1,12 @@
 // Minimal i18n: Chinese source strings are the keys; English dictionaries map them per area.
 // Untranslated strings fall back to the Chinese source, so missing entries never break the UI.
 import editing from "./en/editing.ts";
-import page from "./en/page.ts";
+import workspace from "./en/workspace.ts";
 import panels from "./en/panels.ts";
 
 export type Language = "zh" | "en";
 
-const english: Record<string, string> = { ...page, ...editing, ...panels };
+const english: Record<string, string> = { ...workspace, ...editing, ...panels };
 let current: Language = "zh";
 
 export function setLanguage(language: Language) {
@@ -25,11 +25,11 @@ export function t(source: string, values?: Record<string, string | number>) {
 
 export const languageStorageKey = "dashcut.language";
 
-/** Saved choice, else the system language (Chinese locales stay Chinese, everything else English). */
+/** The saved choice; DashCut is Chinese-first, so the interface starts in Chinese until switched. */
 export function preferredLanguage(): Language {
   try {
     const saved = localStorage.getItem(languageStorageKey);
     if (saved === "zh" || saved === "en") return saved;
   } catch { /* storage unavailable */ }
-  return typeof navigator !== "undefined" && !navigator.language.toLowerCase().startsWith("zh") ? "en" : "zh";
+  return "zh";
 }

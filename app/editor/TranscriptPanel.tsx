@@ -2,6 +2,7 @@
 
 import { KeyboardEvent, memo, useEffect, useMemo, useState } from "react";
 import { Icon } from "./icons";
+import { t } from "../i18n";
 import type { CleanCutItem, TranscriptBlock, TranscriptWord } from "./transcript";
 
 type TranscriptPanelProps = {
@@ -69,11 +70,11 @@ export const TranscriptPanel = memo(function TranscriptPanel({ blocks, time, fla
 
   return <div className="transcript-panel" tabIndex={0} onKeyDown={onKeyDown}>
     <div className="transcript-actions">
-      <button className="ghost-action" disabled={busy || !canTranscribe} onClick={onTranscribe}><Icon name="talk" size={13} />{words.length ? "重新识别文稿" : "识别文稿"}</button>
-      <button className="primary" disabled={busy || !words.length} onClick={onCleanCut}><Icon name="rough" size={13} />智能精剪</button>
+      <button className="ghost-action" disabled={busy || !canTranscribe} onClick={onTranscribe}><Icon name="talk" size={13} />{words.length ? t("重新识别文稿") : t("识别文稿")}</button>
+      <button className="primary" disabled={busy || !words.length} onClick={onCleanCut}><Icon name="rough" size={13} />{t("智能精剪")}</button>
     </div>
-    {selected.length > 0 && <div className="transcript-selection"><span>已选 {selected.length} 个词 · {(selected.at(-1)!.end - selected[0].start).toFixed(1)} 秒</span><button onClick={remove}><Icon name="trash" size={12} />删除并剪掉（⌫）</button></div>}
-    {!words.length && <p className="empty-hint">{canTranscribe ? "点击「识别文稿」获得带时间戳的逐字稿。之后可以像编辑文档一样：选中文字并删除，对应的视频和字幕会一起剪掉。" : "先把含人声的视频或音频拖到时间轴。"}</p>}
+    {selected.length > 0 && <div className="transcript-selection"><span>{t("已选 {count} 个词 · {seconds} 秒", { count: selected.length, seconds: (selected.at(-1)!.end - selected[0].start).toFixed(1) })}</span><button onClick={remove}><Icon name="trash" size={12} />{t("删除并剪掉（⌫）")}</button></div>}
+    {!words.length && <p className="empty-hint">{canTranscribe ? t("点击「识别文稿」获得带时间戳的逐字稿。之后可以像编辑文档一样：选中文字并删除，对应的视频和字幕会一起剪掉。") : t("先把含人声的视频或音频拖到时间轴。")}</p>}
     <div className="transcript-text" onMouseLeave={() => setDragging(false)}>
       {paragraphs.map((paragraph, paragraphIndex) => <p key={paragraphIndex}>
         <time onClick={() => onSeek(paragraph[0].start)}>{Math.floor(paragraph[0].start / 60)}:{String(Math.floor(paragraph[0].start % 60)).padStart(2, "0")}</time>
@@ -84,7 +85,7 @@ export const TranscriptPanel = memo(function TranscriptPanel({ blocks, time, fla
           const inRange = range && index >= range[0] && index <= range[1];
           return <span key={`${word.clipId}-${word.index}`}
             className={`transcript-word${inRange ? " selected" : ""}${index === current ? " current" : ""}${flag ? ` flag-${flag.kind}` : ""}${word.prob < 0.5 ? " unsure" : ""}`}
-            title={flag ? `${flagLabels[flag.kind]}：${flag.label}` : word.prob < 0.5 ? `识别置信度 ${Math.round(word.prob * 100)}%` : undefined}
+            title={flag ? t("{kind}：{label}", { kind: t(flagLabels[flag.kind]), label: flag.label }) : word.prob < 0.5 ? t("识别置信度 {percent}%", { percent: Math.round(word.prob * 100) }) : undefined}
             onMouseDown={(event) => {
               event.preventDefault();
               if (event.shiftKey && anchor !== null) return setFocus(index);
@@ -97,6 +98,6 @@ export const TranscriptPanel = memo(function TranscriptPanel({ blocks, time, fla
         })}
       </p>)}
     </div>
-    {words.length > 0 && <p className="transcript-legend"><i className="flag-filler" />语气词 <i className="flag-stutter" />口吃 <i className="flag-retake" />重复 <i className="unsure" />低置信度 · 双击跳转</p>}
+    {words.length > 0 && <p className="transcript-legend"><i className="flag-filler" />{t("语气词")} <i className="flag-stutter" />{t("口吃")} <i className="flag-retake" />{t("重复")} <i className="unsure" />{t("低置信度 · 双击跳转")}</p>}
   </div>;
 });

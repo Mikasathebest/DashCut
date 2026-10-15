@@ -2,6 +2,7 @@
 
 import { CSSProperties, memo, PointerEvent as ReactPointerEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "./icons";
+import { t } from "../i18n";
 import { SubtitleMode } from "./captions";
 import { Asset, Clip, clipDuration, clipEnd, isStretchable, minClipDuration, Project, snapCandidates, snapTime, Subtitle, Track, trackClips } from "./model";
 
@@ -58,46 +59,46 @@ export const TimelineToolbar = memo(function TimelineToolbar({ mode, onMode, can
   const [menuOpen, setMenuOpen] = useState(false);
   return <div className="timeline-toolbar">
     <div className="toolbar-group">
-      <ToolButton icon="plus" label="导入新素材" onClick={() => onAction("import")} accent />
-      <ToolButton icon={mode === "select" ? "pointer" : "blade"} label={mode === "select" ? "选择模式（B 切换到分割模式）" : "分割模式：点击片段即可分割（A 切回选择）"} active={mode === "blade"} onClick={() => onMode(mode === "select" ? "blade" : "select")} />
-      <ToolButton icon="undo" label="撤销 ⌘Z" disabled={!canUndo} onClick={() => onAction("undo")} />
-      <ToolButton icon="redo" label="重做 ⇧⌘Z" disabled={!canRedo} onClick={() => onAction("redo")} />
-      <ToolButton icon="reset" label="重置所选片段的全部调整" disabled={!hasSelection} onClick={() => onAction("reset")} />
+      <ToolButton icon="plus" label={t("导入新素材")} onClick={() => onAction("import")} accent />
+      <ToolButton icon={mode === "select" ? "pointer" : "blade"} label={mode === "select" ? t("选择模式（B 切换到分割模式）") : t("分割模式：点击片段即可分割（A 切回选择）")} active={mode === "blade"} onClick={() => onMode(mode === "select" ? "blade" : "select")} />
+      <ToolButton icon="undo" label={t("撤销 ⌘Z")} disabled={!canUndo} onClick={() => onAction("undo")} />
+      <ToolButton icon="redo" label={t("重做 ⇧⌘Z")} disabled={!canRedo} onClick={() => onAction("redo")} />
+      <ToolButton icon="reset" label={t("重置所选片段的全部调整")} disabled={!hasSelection} onClick={() => onAction("reset")} />
       <i className="toolbar-divider" />
-      <ToolButton icon="split" label="分割 ⌘B" onClick={() => onAction("split")} />
-      <ToolButton icon="trimLeft" label="向左裁剪：删除播放头左侧 Q" disabled={!hasSelection} onClick={() => onAction("trim-left")} />
-      <ToolButton icon="trimRight" label="向右裁剪：删除播放头右侧 W" disabled={!hasSelection} onClick={() => onAction("trim-right")} />
-      <ToolButton icon="trash" label="删除 ⌫" disabled={!hasSelection} onClick={() => onAction("delete")} />
-      <ToolButton icon="marker" label="添加标记 M" onClick={() => onAction("marker")} />
-      <ToolButton icon="freeze" label="定格 3 秒" disabled={!selectionIsVideo} onClick={() => onAction("freeze")} />
-      <ToolButton icon="reverse" label="倒放" disabled={!selectionIsVideo} onClick={() => onAction("reverse")} />
-      <ToolButton icon="mirror" label="镜像" disabled={!hasSelection} onClick={() => onAction("mirror")} />
-      <ToolButton icon="rotate" label="旋转 90°" disabled={!hasSelection} onClick={() => onAction("rotate")} />
-      <ToolButton icon="crop" label="裁剪画面" disabled={!hasSelection} onClick={() => onAction("crop")} />
+      <ToolButton icon="split" label={t("分割 ⌘B")} onClick={() => onAction("split")} />
+      <ToolButton icon="trimLeft" label={t("向左裁剪：删除播放头左侧 Q")} disabled={!hasSelection} onClick={() => onAction("trim-left")} />
+      <ToolButton icon="trimRight" label={t("向右裁剪：删除播放头右侧 W")} disabled={!hasSelection} onClick={() => onAction("trim-right")} />
+      <ToolButton icon="trash" label={t("删除 ⌫")} disabled={!hasSelection} onClick={() => onAction("delete")} />
+      <ToolButton icon="marker" label={t("添加标记 M")} onClick={() => onAction("marker")} />
+      <ToolButton icon="freeze" label={t("定格 3 秒")} disabled={!selectionIsVideo} onClick={() => onAction("freeze")} />
+      <ToolButton icon="reverse" label={t("倒放")} disabled={!selectionIsVideo} onClick={() => onAction("reverse")} />
+      <ToolButton icon="mirror" label={t("镜像")} disabled={!hasSelection} onClick={() => onAction("mirror")} />
+      <ToolButton icon="rotate" label={t("旋转 90°")} disabled={!hasSelection} onClick={() => onAction("rotate")} />
+      <ToolButton icon="crop" label={t("裁剪画面")} disabled={!hasSelection} onClick={() => onAction("crop")} />
       <i className="toolbar-divider" />
-      <ToolButton icon="extend" label="智能延长（即将推出）" onClick={() => onAction("smart-extend")} />
-      <ToolButton icon="talk" label="智能剪口播：审阅并剪掉语气词、停顿和重复" disabled={!hasSelection} onClick={() => onAction("smart-talk")} />
-      <ToolButton icon="scenes" label="智能镜头分割" disabled={!selectionIsVideo} onClick={() => onAction("smart-scenes")} />
-      <ToolButton icon="rough" label="智能粗剪（即将推出）" onClick={() => onAction("smart-rough")} />
-      <button className={`record-button${recording !== "idle" ? " live" : ""}`} title={recording === "recording" ? "停止录音" : "录音（倒数 3 秒）"} onClick={() => onAction("record")}><Icon name="mic" />{recording === "recording" ? <span>录音中</span> : typeof recording === "number" ? <span>{recording}</span> : null}</button>
+      <ToolButton icon="extend" label={t("智能延长（即将推出）")} onClick={() => onAction("smart-extend")} />
+      <ToolButton icon="talk" label={t("智能剪口播：审阅并剪掉语气词、停顿和重复")} disabled={!hasSelection} onClick={() => onAction("smart-talk")} />
+      <ToolButton icon="scenes" label={t("智能镜头分割")} disabled={!selectionIsVideo} onClick={() => onAction("smart-scenes")} />
+      <ToolButton icon="rough" label={t("智能粗剪（即将推出）")} onClick={() => onAction("smart-rough")} />
+      <button className={`record-button${recording !== "idle" ? " live" : ""}`} title={recording === "recording" ? t("停止录音") : t("录音（倒数 3 秒）")} onClick={() => onAction("record")}><Icon name="mic" />{recording === "recording" ? <span>{t("录音中")}</span> : typeof recording === "number" ? <span>{recording}</span> : null}</button>
     </div>
     <div className="toolbar-group">
-      <ToolButton icon="magnet" label={`主轨磁吸：${toggles.magnet ? "开" : "关"}`} active={toggles.magnet} onClick={() => onToggle("magnet")} />
-      <ToolButton icon="snap" label={`自动吸附：${toggles.snap ? "开" : "关"}`} active={toggles.snap} onClick={() => onToggle("snap")} />
-      <ToolButton icon="link" label={`联动：${toggles.linkage ? "开" : "关"}`} active={toggles.linkage} onClick={() => onToggle("linkage")} />
-      <ToolButton icon="previewAxis" label={`预览轴：${toggles.previewAxis ? "开" : "关"}`} active={toggles.previewAxis} onClick={() => onToggle("previewAxis")} />
-      <ToolButton icon="fit" label="全局预览缩放（适应窗口）" onClick={() => onAction("fit")} />
+      <ToolButton icon="magnet" label={toggles.magnet ? t("主轨磁吸：开") : t("主轨磁吸：关")} active={toggles.magnet} onClick={() => onToggle("magnet")} />
+      <ToolButton icon="snap" label={toggles.snap ? t("自动吸附：开") : t("自动吸附：关")} active={toggles.snap} onClick={() => onToggle("snap")} />
+      <ToolButton icon="link" label={toggles.linkage ? t("联动：开") : t("联动：关")} active={toggles.linkage} onClick={() => onToggle("linkage")} />
+      <ToolButton icon="previewAxis" label={toggles.previewAxis ? t("预览轴：开") : t("预览轴：关")} active={toggles.previewAxis} onClick={() => onToggle("previewAxis")} />
+      <ToolButton icon="fit" label={t("全局预览缩放（适应窗口）")} onClick={() => onAction("fit")} />
       <i className="toolbar-divider" />
-      <ToolButton icon="minus" label="缩小时间轴" onClick={() => onZoom(zoom / 1.4)} />
-      <input className="zoom-slider" type="range" min={Math.log(MIN_ZOOM)} max={Math.log(MAX_ZOOM)} step={0.01} value={Math.log(zoom)} onChange={(event) => onZoom(Math.exp(Number(event.target.value)))} aria-label="时间轴缩放" />
-      <ToolButton icon="plus" label="放大时间轴" onClick={() => onZoom(zoom * 1.4)} />
+      <ToolButton icon="minus" label={t("缩小时间轴")} onClick={() => onZoom(zoom / 1.4)} />
+      <input className="zoom-slider" type="range" min={Math.log(MIN_ZOOM)} max={Math.log(MAX_ZOOM)} step={0.01} value={Math.log(zoom)} onChange={(event) => onZoom(Math.exp(Number(event.target.value)))} aria-label={t("时间轴缩放")} />
+      <ToolButton icon="plus" label={t("放大时间轴")} onClick={() => onZoom(zoom * 1.4)} />
       <div className="toolbar-menu">
-        <ToolButton icon="more" label="轨道设置" active={menuOpen} onClick={() => setMenuOpen(!menuOpen)} />
+        <ToolButton icon="more" label={t("轨道设置")} active={menuOpen} onClick={() => setMenuOpen(!menuOpen)} />
         {menuOpen && <div className="toolbar-popover" onPointerDown={(event) => event.stopPropagation()}>
-          <b>轨道显示</b>
-          <label>视频轨高度<input type="range" min="36" max="120" value={settings.videoHeight} onChange={(event) => onSettings({ ...settings, videoHeight: Number(event.target.value) })} /><span>{settings.videoHeight}px</span></label>
-          <label>音频轨高度<input type="range" min="28" max="100" value={settings.audioHeight} onChange={(event) => onSettings({ ...settings, audioHeight: Number(event.target.value) })} /><span>{settings.audioHeight}px</span></label>
-          <label>波形占比<input type="range" min="0" max="70" value={Math.round(settings.waveformRatio * 100)} onChange={(event) => onSettings({ ...settings, waveformRatio: Number(event.target.value) / 100 })} /><span>{Math.round(settings.waveformRatio * 100)}%</span></label>
+          <b>{t("轨道显示")}</b>
+          <label>{t("视频轨高度")}<input type="range" min="36" max="120" value={settings.videoHeight} onChange={(event) => onSettings({ ...settings, videoHeight: Number(event.target.value) })} /><span>{settings.videoHeight}px</span></label>
+          <label>{t("音频轨高度")}<input type="range" min="28" max="100" value={settings.audioHeight} onChange={(event) => onSettings({ ...settings, audioHeight: Number(event.target.value) })} /><span>{settings.audioHeight}px</span></label>
+          <label>{t("波形占比")}<input type="range" min="0" max="70" value={Math.round(settings.waveformRatio * 100)} onChange={(event) => onSettings({ ...settings, waveformRatio: Number(event.target.value) / 100 })} /><span>{Math.round(settings.waveformRatio * 100)}%</span></label>
         </div>}
       </div>
     </div>
@@ -384,7 +385,7 @@ export function Timeline(props: TimelineProps) {
     return <div key={clip.id} data-clip-id={clip.id} className={`timeline-clip ${isAudio ? "audio" : asset.kind}${selection.includes(clip.id) ? " selected" : ""}${moving ? " moving" : ""}${mode === "blade" ? " blade" : ""}`} style={style} onPointerDown={(event) => startClipPointer(event, clip, track)}>
       {isText ? <div className="clip-text" style={{ height: height - 4 }}>T</div> : !isAudio && <Filmstrip asset={asset} clip={shown} width={width} height={height - 4 - waveHeight} />}
       {waveHeight > 0 && <div className="clip-wave" style={{ height: waveHeight }}><Waveform asset={asset} clip={shown} width={width} height={waveHeight} /></div>}
-      <span className="clip-label">{shown.freezeAt !== null && <em>定格</em>}{shown.reverse && <em>倒放</em>}{shown.speedCurve ? <em>曲线变速</em> : shown.speed !== 1 && <em>{shown.speed}×</em>}{shown.audio.muted && <em>静音</em>}{isText ? (shown.text?.content.split("\n")[0] || "文本") : asset.name.replace(/\.[^.]+$/, "")}<small>{clipDuration(shown).toFixed(1)}s</small></span>
+      <span className="clip-label">{shown.freezeAt !== null && <em>{t("定格")}</em>}{shown.reverse && <em>{t("倒放")}</em>}{shown.speedCurve ? <em>{t("曲线变速")}</em> : shown.speed !== 1 && <em>{shown.speed}×</em>}{shown.audio.muted && <em>{t("静音")}</em>}{isText ? (shown.text?.content.split("\n")[0] || t("文本")) : asset.name.replace(/\.[^.]+$/, "")}<small>{clipDuration(shown).toFixed(1)}s</small></span>
       {keyTimes.map((time) => <i key={time} className="clip-keyframe" style={{ left: time * zoom }} />)}
       {!track.locked && <><i className="clip-edge left" data-edge="left" /><i className="clip-edge right" data-edge="right" /></>}
     </div>;
@@ -426,8 +427,8 @@ export function Timeline(props: TimelineProps) {
   // Chinese and English captions share timing, so both rows move together when either is dragged.
   function captionRow(lang: "zh" | "en") {
     const dimmed = props.subtitleMode !== "both" && props.subtitleMode !== lang;
-    return <div key={lang} className={`timeline-row caption-track ${lang}${dimmed ? " dimmed" : ""}`} style={{ height: 30 }} title={dimmed ? "当前预览与导出未显示此语言" : undefined}>
-      <div className="track-header"><span className="track-name"><Icon name="text" size={12} />{lang === "zh" ? "中文字幕" : "English"}</span></div>
+    return <div key={lang} className={`timeline-row caption-track ${lang}${dimmed ? " dimmed" : ""}`} style={{ height: 30 }} title={dimmed ? t("当前预览与导出未显示此语言") : undefined}>
+      <div className="track-header"><span className="track-name"><Icon name="text" size={12} />{lang === "zh" ? t("中文字幕") : "English"}</span></div>
       <i className="track-lead" />
       <div className="track-lane" style={{ width: contentWidth }} onPointerDown={(event) => { if (event.button !== 0) return; props.onSelectSubtitle(null); props.onSeek(timeFromClientX(event.clientX)); }}>
         {subtitles.map((subtitle) => {
@@ -437,19 +438,19 @@ export function Timeline(props: TimelineProps) {
           const width = Math.max(3, (end - start) * zoom);
           const field = lang;
           const selected = props.selectedSubtitle === subtitle.id;
-          return <div key={subtitle.id} className={`timeline-caption${selected ? " selected" : ""}${time >= subtitle.start && time < subtitle.end ? " live" : ""}`} style={{ left: start * zoom, width }} title={`${subtitle.zh}${subtitle.zh && subtitle.en ? "\n" : ""}${subtitle.en}\n双击编辑 · 拖动调整时间`}
+          return <div key={subtitle.id} className={`timeline-caption${selected ? " selected" : ""}${time >= subtitle.start && time < subtitle.end ? " live" : ""}`} style={{ left: start * zoom, width }} title={`${subtitle.zh}${subtitle.zh && subtitle.en ? "\n" : ""}${subtitle.en}\n${t("双击编辑 · 拖动调整时间")}`}
             onPointerDown={(event) => startCaptionPointer(event, subtitle)}
             onDoubleClick={(event) => { event.stopPropagation(); setEditingCaption(subtitle.id); }}>
             {editingCaption === subtitle.id
-              ? <input autoFocus defaultValue={subtitle[field]} aria-label="编辑字幕"
+              ? <input autoFocus defaultValue={subtitle[field]} aria-label={t("编辑字幕")}
                 onPointerDown={(event) => event.stopPropagation()}
                 onKeyDown={(event) => { event.stopPropagation(); if (event.key === "Enter") event.currentTarget.blur(); if (event.key === "Escape") { event.currentTarget.value = subtitle[field]; event.currentTarget.blur(); } }}
                 onBlur={(event) => { setEditingCaption(null); if (event.currentTarget.value !== subtitle[field]) props.onSubtitleChange(subtitle.id, { [field]: event.currentTarget.value }); }} />
-              : width > 18 && <span>{subtitle[field] || (lang === "en" ? "（未翻译）" : "")}</span>}
+              : width > 18 && <span>{subtitle[field] || (lang === "en" ? t("（未翻译）") : "")}</span>}
             {width > 10 && editingCaption !== subtitle.id && <><i className="clip-edge left" data-edge="left" /><i className="clip-edge right" data-edge="right" /></>}
           </div>;
         })}
-        {!subtitles.length && lang === "zh" && <span className="lane-hint">识别字幕后显示在这里，双击可编辑</span>}
+        {!subtitles.length && lang === "zh" && <span className="lane-hint">{t("识别字幕后显示在这里，双击可编辑")}</span>}
       </div>
     </div>;
   }
@@ -465,9 +466,9 @@ export function Timeline(props: TimelineProps) {
     // The top zone is always visible as a hint; both zones grow while something is being dragged.
     const shown = showNewZones ? " visible dragging" : position === "new-top" && project.clips.length ? " visible" : "";
     return <div className={`timeline-row new-track${shown}${active ? " over" : ""}`} data-drop={position} onDragOver={(event) => onLaneDragOver(event, position)} onDragLeave={() => setAssetDrop(null)} onDrop={(event) => onLaneDrop(event, position)}>
-      <div className="track-header"><small>{position === "new-top" ? "＋ 新建视频轨" : "＋ 新建轨道"}</small></div>
+      <div className="track-header"><small>{position === "new-top" ? t("＋ 新建视频轨") : t("＋ 新建轨道")}</small></div>
       <i className="track-lead" />
-      <div className="track-lane" style={{ width: contentWidth }}>{active && ghostLength > 0 ? <i className="drop-ghost" style={{ left: start * zoom, width: ghostLength * zoom }} /> : <span className="lane-hint">{position === "new-top" ? "把片段拖到这里，新建一条画中画视频轨" : "拖到这里新建轨道"}</span>}</div>
+      <div className="track-lane" style={{ width: contentWidth }}>{active && ghostLength > 0 ? <i className="drop-ghost" style={{ left: start * zoom, width: ghostLength * zoom }} /> : <span className="lane-hint">{position === "new-top" ? t("把片段拖到这里，新建一条画中画视频轨") : t("拖到这里新建轨道")}</span>}</div>
     </div>;
   }
 
@@ -478,7 +479,7 @@ export function Timeline(props: TimelineProps) {
         <i className="track-lead" />
         <div className="ruler-lane" style={{ width: contentWidth }}>
           {ticks.map((tick) => <span key={tick} style={{ left: tick * zoom }}>{step < 1 ? `${tick.toFixed(1)}s` : formatClock(tick, false)}</span>)}
-          {project.markers.map((marker) => <button key={marker.id} className="timeline-marker" style={{ left: marker.time * zoom }} title="标记（右键删除）" onPointerDown={(event) => { event.stopPropagation(); props.onSeek(marker.time); }} onContextMenu={(event) => { event.preventDefault(); props.onRemoveMarker(marker.id); }}><Icon name="marker" size={11} /></button>)}
+          {project.markers.map((marker) => <button key={marker.id} className="timeline-marker" style={{ left: marker.time * zoom }} title={t("标记（右键删除）")} onPointerDown={(event) => { event.stopPropagation(); props.onSeek(marker.time); }} onContextMenu={(event) => { event.preventDefault(); props.onRemoveMarker(marker.id); }}><Icon name="marker" size={11} /></button>)}
         </div>
       </div>
       {newZone("new-top")}
@@ -488,21 +489,21 @@ export function Timeline(props: TimelineProps) {
         const ghostLength = ghostAsset ? ghostAsset.duration : movingClip ? clipDuration(movingClip) : 0;
         return <div key={track.id} className={`timeline-row ${track.kind}${track.main ? " main" : ""}${over ? " over" : ""}${track.hidden ? " hidden-track" : ""}`} style={{ height }} data-drop={track.id}>
           <div className="track-header">
-            <span className="track-name"><Icon name={track.kind === "audio" ? "music" : track.main ? "film" : "image"} size={12} />{track.main ? "主轨" : track.kind === "audio" ? "音频" : "画中画"}</span>
+            <span className="track-name"><Icon name={track.kind === "audio" ? "music" : track.main ? "film" : "image"} size={12} />{track.main ? t("主轨") : track.kind === "audio" ? t("音频") : t("画中画")}</span>
             <span className="track-actions">
-              <button title={track.locked ? "解锁轨道" : "锁定轨道"} className={track.locked ? "on" : ""} onClick={() => props.onTrack(track.id, { locked: !track.locked })}><Icon name={track.locked ? "lock" : "unlock"} size={12} /></button>
-              {track.kind === "video" && <button title={track.hidden ? "显示轨道" : "隐藏轨道"} className={track.hidden ? "on" : ""} onClick={() => props.onTrack(track.id, { hidden: !track.hidden })}><Icon name={track.hidden ? "eyeOff" : "eye"} size={12} /></button>}
-              <button title={track.muted ? "取消静音" : "静音轨道"} className={track.muted ? "on" : ""} onClick={() => props.onTrack(track.id, { muted: !track.muted })}><Icon name={track.muted ? "mute" : "volume"} size={12} /></button>
+              <button title={track.locked ? t("解锁轨道") : t("锁定轨道")} className={track.locked ? "on" : ""} onClick={() => props.onTrack(track.id, { locked: !track.locked })}><Icon name={track.locked ? "lock" : "unlock"} size={12} /></button>
+              {track.kind === "video" && <button title={track.hidden ? t("显示轨道") : t("隐藏轨道")} className={track.hidden ? "on" : ""} onClick={() => props.onTrack(track.id, { hidden: !track.hidden })}><Icon name={track.hidden ? "eyeOff" : "eye"} size={12} /></button>}
+              <button title={track.muted ? t("取消静音") : t("静音轨道")} className={track.muted ? "on" : ""} onClick={() => props.onTrack(track.id, { muted: !track.muted })}><Icon name={track.muted ? "mute" : "volume"} size={12} /></button>
             </span>
           </div>
-          <i className="track-lead">{track.main && <button className="cover-button" onClick={props.onCover} title="编辑封面" style={coverImage ? { backgroundImage: `url("${coverImage}")` } : undefined}><span>封面</span></button>}</i>
+          <i className="track-lead">{track.main && <button className="cover-button" onClick={props.onCover} title={t("编辑封面")} style={coverImage ? { backgroundImage: `url("${coverImage}")` } : undefined}><span>{t("封面")}</span></button>}</i>
           <div className="track-lane" style={{ width: contentWidth }} onPointerDown={(event) => { if (event.button !== 0) return; beginDrag({ type: "marquee", x0: event.clientX, y0: event.clientY, x1: event.clientX, y1: event.clientY, additive: event.shiftKey || event.metaKey }); }} onDragOver={(event) => onLaneDragOver(event, track.id)} onDragLeave={() => setAssetDrop(null)} onDrop={(event) => onLaneDrop(event, track.id)}>
             {track.main && trackClips(project, track.id).flatMap((clip, index, list) => clip.transitionOut && list[index + 1] && Math.abs(clipEnd(clip) - list[index + 1].start) < 0.01
-              ? [<button key={`transition-${clip.id}`} className="clip-transition" style={{ left: clipEnd(clip) * zoom }} title={`转场：${clip.transitionOut.duration.toFixed(1)}s，点击编辑`} onPointerDown={(event) => event.stopPropagation()} onClick={() => props.onTransition(clip.id)}>⧉</button>] : [])}
+              ? [<button key={`transition-${clip.id}`} className="clip-transition" style={{ left: clipEnd(clip) * zoom }} title={t("转场：{duration}s，点击编辑", { duration: clip.transitionOut.duration.toFixed(1) })} onPointerDown={(event) => event.stopPropagation()} onClick={() => props.onTransition(clip.id)}>⧉</button>] : [])}
             {project.clips.filter((clip) => clip.trackId === track.id && !(drag?.type === "move" && drag.moved && drag.clipId === clip.id && drag.target !== track.id)).map((clip) => renderClip(clip, track, height))}
             {movingClip && movingTarget === track.id && movingClip.trackId !== track.id && renderClip(movingClip, track, height)}
             {assetDrop?.target === track.id && ghostLength > 0 && <i className="drop-ghost" style={{ left: assetDrop.start * zoom, width: ghostLength * zoom }} />}
-            {!project.clips.some((clip) => clip.trackId === track.id) && track.main && !assetDrop && <span className="lane-hint">从左侧素材库拖入视频或图片</span>}
+            {!project.clips.some((clip) => clip.trackId === track.id) && track.main && !assetDrop && <span className="lane-hint">{t("从左侧素材库拖入视频或图片")}</span>}
           </div>
         </div>;
       })}

@@ -1,6 +1,7 @@
 // Transcript view of the timeline and "clean cut" analysis (fillers, pauses, repeated takes). Pure.
 import { clipEnd, sourceRangeToTimeline, trackClips } from "./model.ts";
 import type { Clip, Project, TimedWord } from "./model.ts";
+import { t } from "../i18n/index.ts";
 export type { TimedWord };
 
 export type TranscriptWord = TimedWord & { clipId: string; index: number; sourceStart: number; sourceEnd: number; sentence: number };
@@ -148,7 +149,7 @@ export function analyzeCleanCut(project: Project, settings: CleanCutSettings, cl
     if (settings.kinds.pause) {
       const gaps: Array<[number, number]> = [[clip.in, words[0].start], ...words.slice(1).map((word, index): [number, number] => [words[index].end, word.start]), [words.at(-1)!.end, clip.out]];
       for (const [from, to] of gaps) {
-        if (to - from >= settings.pauseThreshold) push(item("pause", `停顿 ${(to - from).toFixed(1)} 秒`, clip, from + settings.keepPause, to - settings.keepPause, true));
+        if (to - from >= settings.pauseThreshold) push(item("pause", t("停顿 {seconds} 秒", { seconds: (to - from).toFixed(1) }), clip, from + settings.keepPause, to - settings.keepPause, true));
       }
     }
 
@@ -161,7 +162,7 @@ export function analyzeCleanCut(project: Project, settings: CleanCutSettings, cl
         if (current.length < 3) continue;
         // An abandoned take is usually a near-duplicate or a truncated start of the next sentence.
         const isRetake = similarity(current, following) >= settings.retakeSimilarity || (following.startsWith(current) && current.length >= 4);
-        if (isRetake) push(item("retake", `重复的句子：${current.slice(0, 18)}`, clip, Math.max(clip.in, sentences[index].start), Math.min(clip.out, sentences[index + 1].start), true));
+        if (isRetake) push(item("retake", t("重复的句子：{text}", { text: current.slice(0, 18) }), clip, Math.max(clip.in, sentences[index].start), Math.min(clip.out, sentences[index + 1].start), true));
       }
     }
   }
@@ -171,7 +172,7 @@ export function analyzeCleanCut(project: Project, settings: CleanCutSettings, cl
 /** Converts silence ranges from FFmpeg (source seconds) into review items for clips without a transcript. */
 export function silenceItems(clip: Clip, silences: Array<{ start: number; end: number }>, keep: number): CleanCutItem[] {
   return silences.flatMap((silence) => {
-    const value = item("silence", `静音 ${(silence.end - silence.start).toFixed(1)} 秒`, clip, silence.start + keep, silence.end - keep, true);
+    const value = item("silence", t("静音 {seconds} 秒", { seconds: (silence.end - silence.start).toFixed(1) }), clip, silence.start + keep, silence.end - keep, true);
     return value ? [value] : [];
   });
 }

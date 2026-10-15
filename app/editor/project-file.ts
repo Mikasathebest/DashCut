@@ -1,6 +1,7 @@
 // Versioned on-disk project document (*.dashcut). Pure: no DOM, no fs.
 import type { SubtitleStyle } from "./captions";
 import type { Asset, Clip, Marker, Project, Subtitle, Track } from "./model";
+import { t } from "../i18n/index.ts";
 
 export const projectSchemaVersion = 2;
 export const projectExtension = "dashcut";
@@ -109,15 +110,15 @@ const migrations: Record<number, (doc: Record<string, unknown>) => Record<string
 };
 
 export function migrateDocument(input: unknown): ProjectDocument {
-  if (!input || typeof input !== "object") throw new Error("项目文件格式无效");
+  if (!input || typeof input !== "object") throw new Error(t("项目文件格式无效"));
   let doc = input as Record<string, unknown>;
-  if (doc.app !== "DashCut") throw new Error("不是 DashCut 项目文件");
+  if (doc.app !== "DashCut") throw new Error(t("不是 DashCut 项目文件"));
   let version = Number(doc.schemaVersion);
-  if (!Number.isInteger(version) || version < 1) throw new Error("项目文件缺少版本号");
-  if (version > projectSchemaVersion) throw new Error(`项目由更新版本的 DashCut 创建（版本 ${version}），请升级后再打开`);
+  if (!Number.isInteger(version) || version < 1) throw new Error(t("项目文件缺少版本号"));
+  if (version > projectSchemaVersion) throw new Error(t("项目由更新版本的 DashCut 创建（版本 {version}），请升级后再打开", { version }));
   while (version < projectSchemaVersion) {
     const step = migrations[version];
-    if (!step) throw new Error(`无法从版本 ${version} 升级项目文件`);
+    if (!step) throw new Error(t("无法从版本 {version} 升级项目文件", { version }));
     doc = step(doc);
     version = Number(doc.schemaVersion);
   }
@@ -126,13 +127,13 @@ export function migrateDocument(input: unknown): ProjectDocument {
 
 function validateDocument(doc: ProjectDocument) {
   for (const key of ["assets", "tracks", "clips", "markers", "subtitles"] as const) {
-    if (!Array.isArray(doc[key])) throw new Error(`项目文件缺少 ${key}`);
+    if (!Array.isArray(doc[key])) throw new Error(t("项目文件缺少 {key}", { key }));
   }
-  if (!doc.tracks.some((track) => track.main)) throw new Error("项目文件缺少主轨");
+  if (!doc.tracks.some((track) => track.main)) throw new Error(t("项目文件缺少主轨"));
   const assetIds = new Set(doc.assets.map((asset) => asset.id));
   const trackIds = new Set(doc.tracks.map((track) => track.id));
   const orphan = doc.clips.find((clip) => !assetIds.has(clip.assetId) || !trackIds.has(clip.trackId));
-  if (orphan) throw new Error(`片段 ${orphan.id} 引用了不存在的素材或轨道`);
+  if (orphan) throw new Error(t("片段 {id} 引用了不存在的素材或轨道", { id: orphan.id }));
   return doc;
 }
 

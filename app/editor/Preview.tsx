@@ -4,6 +4,7 @@ import { CSSProperties, memo, useEffect, useMemo, useRef, useState } from "react
 import { captionLines, SubtitleMode, SubtitleStyle } from "./captions";
 import { Asset, Clip, clipEnd, evaluateVisual, evaluateVolume, Project, renderClips, sourceTimeAt, speedAt, Subtitle, textBaseScale } from "./model";
 import { measureText, renderText } from "./text";
+import { t } from "../i18n";
 
 export type { SubtitleStyle } from "./captions";
 
@@ -320,7 +321,7 @@ export function Preview({ project, assets, time, rate, muted, ratio, subtitleMod
   return <div ref={frameRef} className={`video-frame ratio-${ratio.replace(":", "-")}`}>
     {layers.map(({ clip, asset, muted: layerMuted }) => <VisualLayer key={clip.id} clip={clip} asset={asset} time={time} rate={rate} muted={layerMuted} frame={frame} ratio={ratio} />)}
     {audioLayers.map(({ clip, asset, muted: layerMuted }) => <AudioLayer key={clip.id} clip={clip} asset={asset} time={time} rate={rate} muted={layerMuted} />)}
-    {!project.clips.length && <button className="empty-stage" onClick={onImport}><span>＋</span><strong>导入素材开始创作</strong><small>导入后从左侧素材库拖到时间轴</small></button>}
+    {!project.clips.length && <button className="empty-stage" onClick={onImport}><span>＋</span><strong>{t("导入素材开始创作")}</strong><small>{t("导入后从左侧素材库拖到时间轴")}</small></button>}
     {subtitle && <CaptionOverlay subtitle={subtitle} mode={subtitleMode} style={subtitleStyle} scale={scale} />}
   </div>;
 }

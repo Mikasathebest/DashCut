@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { readLoudness } from "./Preview";
+import { t } from "../i18n";
 
 /** Live momentary loudness while the preview plays, with the export target marked. */
 export function LoudnessMeter({ active, target }: { active: boolean; target: number | null }) {
@@ -28,7 +29,7 @@ export function LoudnessMeter({ active, target }: { active: boolean; target: num
   const fraction = shown === null ? 0 : Math.max(0, Math.min(1, (shown + 40) / 40));
   const goal = target ?? -14;
   const tone = shown === null ? "" : shown > goal + 3 ? " loud" : shown < goal - 6 ? " quiet" : " good";
-  return <div className={`loudness-meter${tone}`} title={`瞬时响度（预览近似值）；目标 ${goal} LUFS`}>
+  return <div className={`loudness-meter${tone}`} title={t("瞬时响度（预览近似值）；目标 {goal} LUFS", { goal })}>
     <i style={{ width: `${fraction * 100}%` }} />
     <em style={{ left: `${((goal + 40) / 40) * 100}%` }} />
     <span>{shown === null || shown <= -60 ? "— LUFS" : `${shown.toFixed(1)} LUFS`}</span>

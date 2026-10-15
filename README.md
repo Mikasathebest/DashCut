@@ -113,6 +113,10 @@ Windows x64 releases produce an unsigned one-click `.exe` without credentials; W
 - **Smart reframe (✦ 智能转竖屏):** detects faces locally (MediaPipe BlazeFace, downloaded once, about 0.2 MB) and turns 16:9 footage into a 9:16 cover-fit framing with smooth horizontal keyframes that follow the speaker. A tracking-speed setting trades calm pans for tighter following, and the keyframes stay editable.
 - **Pre-publish check:** renders the timeline once without writing a file. It reports loudness and true peak, black frames, long silences, captions that are too long, too fast, too brief or overlapping, and missing media, each with a jump or a one-click fix.
 
+### Interface language
+
+The **中 / EN** switch in the top bar changes the interface, menus and dialogs between Chinese and English. DashCut starts in Chinese and remembers your choice. Translations live in `app/i18n/en/*.ts`, keyed by the Chinese source text; untranslated strings fall back to Chinese.
+
 ## 4. Contributing and merging code
 
 1. Fork the repository and create a focused branch such as `feat/subtitle-translation` or `fix/timeline-split`.

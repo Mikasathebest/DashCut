@@ -74,7 +74,7 @@ type RecentProject = { path: string; title: string; openedAt: string; exists: bo
 const autosaveInterval = 30_000;
 
 function newProjectMeta() {
-  return { id: uid("project"), title: "未命名项目", createdAt: new Date().toISOString() };
+  return { id: uid("project"), title: t("未命名项目"), createdAt: new Date().toISOString() };
 }
 
 export default function Home() {
@@ -318,14 +318,14 @@ export default function Home() {
       commit(pruneTracks(deleteClips(project, selection, options)));
       setSelection([]);
     }
-    setToast(`已${remove ? "剪切" : "复制"} ${selectedClips.length} 个片段`);
+    setToast(remove ? t("已剪切 {count} 个片段", { count: selectedClips.length }) : t("已复制 {count} 个片段", { count: selectedClips.length }));
     return true;
   }
 
   /** Pastes at the playhead, keeping relative timing; clips go back to their track when it has room. */
   function pasteClips(at = current) {
     const copied = clipboard.current.filter((clip) => assetMap.has(clip.assetId));
-    if (!copied.length) return setToast("剪贴板里没有片段");
+    if (!copied.length) return setToast(t("剪贴板里没有片段"));
     const base = Math.min(...copied.map((clip) => clip.start));
     let next = project;
     const ids: string[] = [];
@@ -342,7 +342,7 @@ export default function Home() {
     }
     commit(next);
     setSelection(ids);
-    setToast(`已粘贴 ${ids.length} 个片段`);
+    setToast(t("已粘贴 {count} 个片段", { count: ids.length }));
   }
 
   useEffect(() => {
@@ -377,9 +377,9 @@ export default function Home() {
       if (asset) imported.push(asset);
     }
     const skipped = files.length - imported.length;
-    if (!imported.length) return setToast("无法读取所选素材");
+    if (!imported.length) return setToast(t("无法读取所选素材"));
     setAssets((items) => [...items, ...imported]);
-    setToast(`已导入 ${imported.length} 个素材${skipped ? `，${skipped} 个文件无法读取` : ""}，拖到时间轴开始剪辑`);
+    setToast(skipped ? t("已导入 {count} 个素材，{skipped} 个文件无法读取，拖到时间轴开始剪辑", { count: imported.length, skipped }) : t("已导入 {count} 个素材，拖到时间轴开始剪辑", { count: imported.length }));
     for (const asset of imported) {
       if (asset.kind === "video") void buildFilmstrip(asset).then((frames) => patchAsset(asset.id, { frames }));
       if ((asset.kind === "video" || asset.kind === "audio") && window.dashCutDesktop && asset.sourcePath) {
@@ -403,7 +403,7 @@ export default function Home() {
   }
 
   function removeAsset(asset: Asset) {
-    if (usedAssets.has(asset.id)) return setToast("素材正在时间轴中使用，请先删除对应片段");
+    if (usedAssets.has(asset.id)) return setToast(t("素材正在时间轴中使用，请先删除对应片段"));
     URL.revokeObjectURL(asset.url);
     setAssets((items) => items.filter((item) => item.id !== asset.id));
   }
@@ -476,7 +476,7 @@ export default function Home() {
     if (!clip) return;
     const next = { ...clip, ...patch };
     const track = project.tracks.find((item) => item.id === clip.trackId);
-    if (!(track?.main && toggles.magnet) && !hasRoom(project, clip.trackId, next.start, clipDuration(next), clip.id)) return setToast("与同轨道的片段重叠，请先移动相邻片段");
+    if (!(track?.main && toggles.magnet) && !hasRoom(project, clip.trackId, next.start, clipDuration(next), clip.id)) return setToast(t("与同轨道的片段重叠，请先移动相邻片段"));
     commit(updateClip(project, clipId, patch, options));
   }
 
@@ -491,7 +491,7 @@ export default function Home() {
 
   function splitAtPlayhead() {
     const targets = targetsAtPlayhead().filter((clip) => !project.tracks.find((track) => track.id === clip.trackId)?.locked);
-    if (!targets.length) return setToast("请把播放头移到要分割的片段上");
+    if (!targets.length) return setToast(t("请把播放头移到要分割的片段上"));
     let next = project;
     let lastRight: string | null = null;
     for (const clip of targets) {
@@ -499,7 +499,7 @@ export default function Home() {
       next = result.project;
       lastRight = result.rightId ?? lastRight;
     }
-    if (next === project) return setToast("播放头离片段边缘太近");
+    if (next === project) return setToast(t("播放头离片段边缘太近"));
     commit(next);
     if (lastRight) setSelection([lastRight]);
   }
@@ -512,21 +512,21 @@ export default function Home() {
   }
 
   function patchSelected(patch: (clip: Clip) => Partial<Clip>, key = "") {
-    if (!selectedClips.length) return setToast("请先在时间轴上选择片段");
+    if (!selectedClips.length) return setToast(t("请先在时间轴上选择片段"));
     commit(selectedClips.reduce((value, clip) => updateClip(value, clip.id, patch(clip), options), project), key);
   }
 
   /** Opens the clean-cut review for the selected clips, or for the whole timeline when nothing is selected. */
   async function smartTalk() {
     const targets = (selectedClips.length ? selectedClips : project.clips).filter((clip) => assetMap.get(clip.assetId)?.hasAudio && clip.freezeAt === null && !clip.reverse);
-    if (!targets.length) return setToast("没有可精剪的人声片段；倒放或定格片段请先恢复");
-    const scope = selectedClips.length ? `所选 ${targets.length} 个片段` : "整个时间轴";
+    if (!targets.length) return setToast(t("没有可精剪的人声片段；倒放或定格片段请先恢复"));
+    const scope = selectedClips.length ? t("所选 {count} 个片段", { count: targets.length }) : t("整个时间轴");
     const transcribed = targets.filter((clip) => project.transcripts?.[clip.assetId]);
     const untranscribed = targets.filter((clip) => !project.transcripts?.[clip.assetId]);
     // Clips without a transcript fall back to FFmpeg silence detection.
     const silences: CleanCutItem[] = [];
     if (untranscribed.length && window.dashCutDesktop) {
-      setBusy("正在检测静音…");
+      setBusy(t("正在检测静音…"));
       try {
         for (const clip of untranscribed) {
           const asset = assetMap.get(clip.assetId)!;
@@ -534,12 +534,12 @@ export default function Home() {
           silences.push(...silenceItems(clip, result.silences, cleanCutSettings.keepPause));
         }
       } catch (error) {
-        setToast(error instanceof Error ? error.message : "静音检测失败");
+        setToast(error instanceof Error ? error.message : t("静音检测失败"));
       } finally {
         setBusy("");
       }
     }
-    const note = untranscribed.length ? (transcribed.length ? "；部分片段未识别文稿，只检测静音" : "；未识别文稿，只检测静音（识别文稿后可检测语气词和重复）") : "";
+    const note = untranscribed.length ? (transcribed.length ? t("；部分片段未识别文稿，只检测静音") : t("；未识别文稿，只检测静音（识别文稿后可检测语气词和重复）")) : "";
     setCleanCut({ clipIds: selectedClips.length ? targets.map((clip) => clip.id) : undefined, scope: scope + note, silences });
   }
 
@@ -547,29 +547,29 @@ export default function Home() {
     commit(cutSourceRanges(project, items.map((item) => ({ clipId: item.clipId, start: item.sourceStart, end: item.sourceEnd })), options));
     setCleanCut(null);
     setSelection([]);
-    setToast(`已剪掉 ${items.length} 处，共 ${items.reduce((sum, item) => sum + item.end - item.start, 0).toFixed(1)} 秒`);
+    setToast(t("已剪掉 {count} 处，共 {seconds} 秒", { count: items.length, seconds: items.reduce((sum, item) => sum + item.end - item.start, 0).toFixed(1) }));
   }
 
   function deleteTranscriptWords(words: TranscriptWord[]) {
-    if (isGenerating) return setToast("请等待识别完成后再编辑");
+    if (isGenerating) return setToast(t("请等待识别完成后再编辑"));
     const cuts = wordsToCuts(words);
     commit(cutSourceRanges(project, cuts, options));
-    setToast(`已删除 ${words.length} 个词，对应画面和字幕已剪掉`);
+    setToast(t("已删除 {count} 个词，对应画面和字幕已剪掉", { count: words.length }));
   }
 
   async function smartScenes() {
     const clip = primaryClip;
     const asset = primaryAsset;
-    if (!clip || asset?.kind !== "video" || clip.freezeAt !== null) return setToast("请先选择一个视频片段");
-    if (!window.dashCutDesktop) return setToast("智能镜头分割仅支持桌面版");
-    setBusy("正在识别镜头切换…");
+    if (!clip || asset?.kind !== "video" || clip.freezeAt !== null) return setToast(t("请先选择一个视频片段"));
+    if (!window.dashCutDesktop) return setToast(t("智能镜头分割仅支持桌面版"));
+    setBusy(t("正在识别镜头切换…"));
     try {
       const cuts = await window.dashCutDesktop.detectScenes(asset.sourcePath, { in: clip.in, out: clip.out });
-      if (!cuts.length) return setToast("没有检测到镜头切换");
+      if (!cuts.length) return setToast(t("没有检测到镜头切换"));
       commit((state) => splitAtSourceTimes(state, clip.id, cuts));
-      setToast(`已按镜头切换分割为 ${cuts.length + 1} 段`);
+      setToast(t("已按镜头切换分割为 {count} 段", { count: cuts.length + 1 }));
     } catch (error) {
-      setToast(error instanceof Error ? error.message : "镜头分割失败");
+      setToast(error instanceof Error ? error.message : t("镜头分割失败"));
     } finally {
       setBusy("");
     }
@@ -581,13 +581,13 @@ export default function Home() {
       return;
     }
     if (recording !== "idle") return;
-    if (!navigator.mediaDevices?.getUserMedia) return setToast("当前环境不支持录音");
-    if (window.dashCutDesktop && !(await window.dashCutDesktop.requestMicrophone())) return setToast("请在系统设置 → 隐私与安全性 → 麦克风中允许 DashCut");
+    if (!navigator.mediaDevices?.getUserMedia) return setToast(t("当前环境不支持录音"));
+    if (window.dashCutDesktop && !(await window.dashCutDesktop.requestMicrophone())) return setToast(t("请在系统设置 → 隐私与安全性 → 麦克风中允许 DashCut"));
     let stream: MediaStream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
     } catch {
-      return setToast("无法打开麦克风");
+      return setToast(t("无法打开麦克风"));
     }
     for (const count of [3, 2, 1]) {
       setRecording(count);
@@ -609,7 +609,7 @@ export default function Home() {
     setRecording("idle");
     setPlaying(false);
     const blob = new Blob(session.chunks, { type: "audio/webm" });
-    if (blob.size < 1000) return setToast("录音太短");
+    if (blob.size < 1000) return setToast(t("录音太短"));
     const elapsed = Math.max(0.5, currentRef.current - session.start);
     const name = `录音 ${new Date().toLocaleTimeString("zh-CN", { hour12: false })}.webm`;
     const sourcePath = window.dashCutDesktop ? await window.dashCutDesktop.saveRecording(await blob.arrayBuffer()) : "";
@@ -627,11 +627,11 @@ export default function Home() {
       const clip = createClip(recorded, track?.id ?? created!.trackId, session.start);
       return pruneTracks({ ...base, clips: [...base.clips, clip] });
     });
-    setToast("录音已添加到音频轨");
+    setToast(t("录音已添加到音频轨"));
   }
 
   function runAction(action: ToolbarAction) {
-    if (isGenerating && !["import", "fit", "record"].includes(action)) return setToast("请等待字幕生成完成后再编辑时间线");
+    if (isGenerating && !["import", "fit", "record"].includes(action)) return setToast(t("请等待字幕生成完成后再编辑时间线"));
     switch (action) {
       case "import": return fileInputRef.current?.click();
       case "undo": return undo();
@@ -644,7 +644,7 @@ export default function Home() {
       case "trim-left":
       case "trim-right": {
         const targets = selectedClips.filter((clip) => current > clip.start && current < clipEnd(clip));
-        if (!targets.length) return setToast("请选择片段并把播放头移到片段内");
+        if (!targets.length) return setToast(t("请选择片段并把播放头移到片段内"));
         commit(targets.reduce((value, clip) => trimAt(value, clip.id, current, action === "trim-left" ? "left" : "right", options), project));
         if (action === "trim-left" && toggles.magnet && project.tracks.find((track) => track.id === targets[0].trackId)?.main) seek(targets[0].start);
         return;
@@ -659,21 +659,21 @@ export default function Home() {
       }
       case "freeze": {
         const clip = primaryClip;
-        if (!clip || primaryAsset?.kind !== "video" || clip.freezeAt !== null) return setToast("请选择一个视频片段");
-        if (current < clip.start || current > clipEnd(clip)) return setToast("请把播放头移到所选视频片段上");
+        if (!clip || primaryAsset?.kind !== "video" || clip.freezeAt !== null) return setToast(t("请选择一个视频片段"));
+        if (current < clip.start || current > clipEnd(clip)) return setToast(t("请把播放头移到所选视频片段上"));
         const result = freezeFrame(project, clip.id, current, freezeLength, options);
         commit(result.project);
         if (result.freezeId) setSelection([result.freezeId]);
-        return setToast(`已在 ${formatClock(current)} 定格 ${freezeLength} 秒`);
+        return setToast(t("已在 {time} 定格 {seconds} 秒", { time: formatClock(current), seconds: freezeLength }));
       }
       case "reverse": return patchSelected((clip) => ({ reverse: !clip.reverse }));
       case "mirror": return patchSelected((clip) => ({ mirror: !clip.mirror }));
       case "rotate": return patchSelected((clip) => ({ rotate90: ((clip.rotate90 + 90) % 360) as Clip["rotate90"] }));
       case "crop":
-        if (!primaryClip || primaryAsset?.kind === "audio") return setToast("请选择一个画面片段");
+        if (!primaryClip || primaryAsset?.kind === "audio") return setToast(t("请选择一个画面片段"));
         return setCropOpen(true);
-      case "smart-extend": return setToast("智能延长需要生成式视频模型，即将推出");
-      case "smart-rough": return setToast("智能粗剪即将推出");
+      case "smart-extend": return setToast(t("智能延长需要生成式视频模型，即将推出"));
+      case "smart-rough": return setToast(t("智能粗剪即将推出"));
       case "smart-talk": return void smartTalk();
       case "smart-scenes": return void smartScenes();
       case "record": return void toggleRecording();
@@ -783,36 +783,36 @@ export default function Home() {
   /** Runs recognition (and optional translation); resolves with the message shown to the user. */
   async function generateSubtitles(verbatim = false, translate?: boolean): Promise<string> {
     let outcome = "";
-    const notify = (message: string) => { outcome = message; notify(message); };
+    const notify = (message: string) => { outcome = message; setToast(message); };
     const withTranslation = translate ?? autoTranslate;
-    if (isGenerating) return "正在识别中，请稍候";
+    if (isGenerating) return t("正在识别中，请稍候");
     if (recognitionEngine === "cloud" || withTranslation) {
-      if (!window.dashCutDesktop) { notify("云端字幕仅支持桌面版"); return outcome; }
+      if (!window.dashCutDesktop) { notify(t("云端字幕仅支持桌面版")); return outcome; }
       if (!aiConfig.baseUrl.trim() || !aiConfig.apiKey.trim() || !aiConfig.model.trim()) {
-        { notify(recognitionEngine === "cloud" ? "请先填写 API Base URL、API Key 并选择模型" : "请先填写 API 设置，或关闭自动翻译以离线识别"); return outcome; }
+        { notify(recognitionEngine === "cloud" ? t("请先填写 API Base URL、API Key 并选择模型") : t("请先填写 API 设置，或关闭自动翻译以离线识别")); return outcome; }
       }
     }
     const sources = captionSources();
     if (recognitionEngine === "local") {
       if (!window.dashCutDesktop) {
-        notify("本地识别仅支持桌面版");
+        notify(t("本地识别仅支持桌面版"));
         setHardwareOpen(true);
         return outcome;
       }
       if (!hardware?.runtime?.ready) {
-        notify("本地 AI 运行时不可用，请重新安装 DashCut 极剪");
+        notify(t("本地 AI 运行时不可用，请重新安装 DashCut 极剪"));
         setHardwareOpen(true);
         void checkHardware();
         return outcome;
       }
       if (!localModels.find((model) => model.id === selectedModel)?.installed) {
-        notify(`请先下载安装 ${selectedModel} 模型`);
+        notify(t("请先下载安装 {model} 模型", { model: selectedModel }));
         setHardwareOpen(true);
         return outcome;
       }
-      if (!sources.length) { notify("时间轴中没有含人声的视频或音频"); return outcome; }
+      if (!sources.length) { notify(t("时间轴中没有含人声的视频或音频")); return outcome; }
       setIsGenerating(true);
-      setCaptionProgress({ progress: 0, stage: "正在加载本地模型" });
+      setCaptionProgress({ progress: 0, stage: t("正在加载本地模型") });
       try {
         const useCuda = Boolean(hardware.gpus.some((gpu) => gpu.fasterWhisperAcceleration) && Number(hardware.runtime.info?.cudaDeviceCount) > 0);
         const response = await window.dashCutDesktop.transcribeLocal({
@@ -823,42 +823,42 @@ export default function Home() {
           hotwords,
           verbatim,
         });
-        setCaptionProgress({ progress: 1, stage: "识别完成" });
+        setCaptionProgress({ progress: 1, stage: t("识别完成") });
         const generated = placeCaptions(sources, response.results, false);
         const transcripts = buildTranscripts(sources, response.results, "local");
         commit((state) => ({ ...state, subtitles: generated, transcripts: { ...state.transcripts, ...transcripts } }));
         if (withTranslation && generated.length) {
-          notify("本地识别完成，正在生成中英译文…");
-          setCaptionProgress({ progress: 0, stage: "正在翻译" });
+          notify(t("本地识别完成，正在生成中英译文…"));
+          setCaptionProgress({ progress: 0, stage: t("正在翻译") });
           try {
             setSubtitles(await window.dashCutDesktop.translateSubtitles({ config: aiConfig, subtitles: generated }));
-            notify(`双语字幕完成 · ${response.model} + ${aiConfig.model}（保留识别时间戳）`);
+            notify(t("双语字幕完成 · {localModel} + {aiModel}（保留识别时间戳）", { localModel: response.model, aiModel: aiConfig.model }));
           } catch (error) {
-            notify(`已保留原语言字幕；翻译失败：${error instanceof Error ? error.message : "请重试"}`);
+            notify(t("已保留原语言字幕；翻译失败：{error}", { error: error instanceof Error ? error.message : t("请重试") }));
           }
-        } else notify(`本地识别完成 · ${response.model} / ${response.device}`);
+        } else notify(t("本地识别完成 · {model} / {device}", { model: response.model, device: response.device }));
       } catch (error) {
-        notify(error instanceof Error ? error.message : "本地识别失败");
+        notify(error instanceof Error ? error.message : t("本地识别失败"));
       } finally {
         setIsGenerating(false);
         setCaptionProgress(null);
       }
       return outcome;
     }
-    if (!window.dashCutDesktop) return "仅支持桌面版";
-    if (!sources.length) { notify("时间轴中没有含人声的视频或音频"); return outcome; }
+    if (!window.dashCutDesktop) return t("仅支持桌面版");
+    if (!sources.length) { notify(t("时间轴中没有含人声的视频或音频")); return outcome; }
     setIsGenerating(true);
-    setCaptionProgress({ progress: 0, stage: "正在提取音轨" });
+    setCaptionProgress({ progress: 0, stage: t("正在提取音轨") });
     try {
       const response = await window.dashCutDesktop.transcribeCloud({ config: aiConfig, clips: sources.map((source) => ({ id: source.id, path: source.asset.sourcePath })) });
       const transcripts = buildTranscripts(sources, response.results.map((result) => ({ ...result, segments: result.segments.map((segment) => ({ ...segment, text: segment.zh || segment.text })) })), "cloud");
       const generated = placeCaptions(sources, response.results, true);
       commit((state) => ({ ...state, subtitles: generated, transcripts: { ...state.transcripts, ...transcripts } }));
       notify(response.failedChunks
-        ? `云端字幕完成，但有 ${response.failedChunks}/${response.totalChunks} 段识别失败，可重试或改用本地识别`
-        : "云端双语字幕完成，时间为模型估算；如整体偏早或偏晚，可用“时间偏移”一键校准");
+        ? t("云端字幕完成，但有 {failed}/{total} 段识别失败，可重试或改用本地识别", { failed: response.failedChunks, total: response.totalChunks })
+        : t("云端双语字幕完成，时间为模型估算；如整体偏早或偏晚，可用“时间偏移”一键校准"));
     } catch (error) {
-      notify(error instanceof Error ? error.message : "云端识别失败");
+      notify(error instanceof Error ? error.message : t("云端识别失败"));
     } finally {
       setIsGenerating(false);
       setCaptionProgress(null);
@@ -867,25 +867,25 @@ export default function Home() {
   }
 
   async function refreshAiModels() {
-    if (!window.dashCutDesktop) return setToast("模型查询仅支持桌面版");
+    if (!window.dashCutDesktop) return setToast(t("模型查询仅支持桌面版"));
     setLoadingAiModels(true);
     try {
       const models = await window.dashCutDesktop.listAiModels(aiConfig);
       setAiModels(models);
-      setToast(`已查询 ${models.length} 个模型；云端识别需选择支持音频输入的模型`);
-    } catch (error) { setToast(error instanceof Error ? error.message : "模型查询失败"); }
+      setToast(t("已查询 {count} 个模型；云端识别需选择支持音频输入的模型", { count: models.length }));
+    } catch (error) { setToast(error instanceof Error ? error.message : t("模型查询失败")); }
     finally { setLoadingAiModels(false); }
   }
 
   async function translateExistingSubtitles() {
     if (!window.dashCutDesktop || isGenerating || !project.subtitles.length) return;
-    if (!aiConfig.baseUrl.trim() || !aiConfig.apiKey.trim() || !aiConfig.model.trim()) return setToast("请先填写 API Base URL、API Key 并选择模型");
+    if (!aiConfig.baseUrl.trim() || !aiConfig.apiKey.trim() || !aiConfig.model.trim()) return setToast(t("请先填写 API Base URL、API Key 并选择模型"));
     setIsGenerating(true);
-    setCaptionProgress({ progress: 0, stage: "正在翻译" });
+    setCaptionProgress({ progress: 0, stage: t("正在翻译") });
     try {
       setSubtitles(await window.dashCutDesktop.translateSubtitles({ config: aiConfig, subtitles: project.subtitles }));
-      setToast("中英译文已更新，字幕时间保持不变");
-    } catch (error) { setToast(error instanceof Error ? error.message : "翻译失败，原字幕已保留"); }
+      setToast(t("中英译文已更新，字幕时间保持不变"));
+    } catch (error) { setToast(error instanceof Error ? error.message : t("翻译失败，原字幕已保留")); }
     finally { setIsGenerating(false); setCaptionProgress(null); }
   }
 
@@ -893,7 +893,7 @@ export default function Home() {
   function updateSubtitleTime(id: number, field: "start" | "end", value: number) {
     const subtitle = project.subtitles.find((item) => item.id === id);
     if (!subtitle || !Number.isFinite(value) || value < 0 || (field === "end" && value <= subtitle.start)) {
-      setToast("字幕时间不能为负，结束时间必须大于开始时间");
+      setToast(t("字幕时间不能为负，结束时间必须大于开始时间"));
       return false;
     }
     setSubtitles(retimeSubtitle(project.subtitles, id, field, value));
@@ -903,7 +903,10 @@ export default function Home() {
   function shiftCaptions(delta: number, fromSelected: boolean) {
     if (!project.subtitles.length) return;
     setSubtitles(shiftSubtitles(project.subtitles, delta, fromSelected ? selectedSubtitle : null), "caption-shift");
-    setToast(`${fromSelected ? "选中及之后的" : "全部"}字幕已${delta > 0 ? "延后" : "提前"} ${Math.abs(delta)} 秒`);
+    const seconds = Math.abs(delta);
+    setToast(fromSelected
+      ? (delta > 0 ? t("选中及之后的字幕已延后 {seconds} 秒", { seconds }) : t("选中及之后的字幕已提前 {seconds} 秒", { seconds }))
+      : (delta > 0 ? t("全部字幕已延后 {seconds} 秒", { seconds }) : t("全部字幕已提前 {seconds} 秒", { seconds })));
   }
 
   function updateSubtitle(id: number, field: "zh" | "en", value: string) {
@@ -928,7 +931,7 @@ export default function Home() {
         setSelectedModel(profile.assessment.model as LocalModelInfo["id"]);
       }
     } catch {
-      setToast("硬件检测失败，请重新启动桌面应用");
+      setToast(t("硬件检测失败，请重新启动桌面应用"));
     } finally {
       setCheckingHardware(false);
     }
@@ -941,9 +944,9 @@ export default function Home() {
       await window.dashCutDesktop.installLocalModel(model);
       setLocalModels(await window.dashCutDesktop.getLocalModels());
       setSelectedModel(model);
-      setToast(`${model} 模型安装完成`);
+      setToast(t("{model} 模型安装完成", { model }));
     } catch (error) {
-      setToast(error instanceof Error ? error.message : `${model} 模型安装失败`);
+      setToast(error instanceof Error ? error.message : t("{model} 模型安装失败", { model }));
     } finally {
       setInstallingModel("");
     }
@@ -953,15 +956,15 @@ export default function Home() {
     if (!window.dashCutDesktop) return;
     await window.dashCutDesktop.removeLocalModel(model);
     setLocalModels(await window.dashCutDesktop.getLocalModels());
-    setToast(`${model} 模型已删除`);
+    setToast(t("{model} 模型已删除", { model }));
   }
 
 
   /* ------------------------------------------------------------ export & cover */
 
   async function runHealthCheck() {
-    if (!window.dashCutDesktop) return setToast("发布前检查仅支持桌面版");
-    if (!project.clips.length) return setToast("时间轴是空的");
+    if (!window.dashCutDesktop) return setToast(t("发布前检查仅支持桌面版"));
+    if (!project.clips.length) return setToast(t("时间轴是空的"));
     setHealth({ running: true, issues: null });
     setProgressStage("");
     const issues: HealthIssue[] = [];
@@ -970,7 +973,7 @@ export default function Home() {
       const used = assets.filter((asset) => asset.kind !== "text" && usedAssets.has(asset.id));
       const present = await window.dashCutDesktop.mediaExists(used.map((asset) => asset.sourcePath));
       const missing = used.filter((_, index) => !present[index]);
-      for (const asset of missing) issues.push({ id: `missing-${asset.id}`, severity: "error", title: `缺少素材：${asset.name}`, detail: asset.sourcePath || "没有本地路径", fix: "relink" });
+      for (const asset of missing) issues.push({ id: `missing-${asset.id}`, severity: "error", title: t("缺少素材：{name}", { name: asset.name }), detail: asset.sourcePath || t("没有本地路径"), fix: "relink" });
       const canvas = canvasSize(ratio, exportResolution);
       const context = document.createElement("canvas").getContext("2d")!;
       issues.push(...captionIssues(project.subtitles, subtitleStyle, subtitleMode, canvas, (text, fontPx) => {
@@ -978,7 +981,7 @@ export default function Home() {
         return context.measureText(text).width;
       }));
       if (!missing.length) {
-        setProgressStage("正在渲染并测量成片…");
+        setProgressStage(t("正在渲染并测量成片…"));
         const request = toComposition(project, assets, { ratio, resolution: 720, fps: 30, platform, subtitleStyle, subtitleMode });
         // Titles are skipped here: they cannot change loudness, black frames or silence.
         issues.push(...analysisIssues(await window.dashCutDesktop.analyzeComposition(request), exportFormat === "gif" ? null : loudnessTarget));
@@ -986,7 +989,7 @@ export default function Home() {
       setHealth({ running: false, issues });
     } catch (error) {
       setHealth({ running: false, issues });
-      setToast(error instanceof Error ? `检查未完成：${error.message}` : "检查未完成");
+      setToast(error instanceof Error ? t("检查未完成：{error}", { error: error.message }) : t("检查未完成"));
     }
   }
 
@@ -994,7 +997,7 @@ export default function Home() {
     if (issue.fix === "loudness") {
       setLoudnessTarget(-14);
       setHealth((state) => ({ ...state, issues: state.issues?.filter((item) => item.fix !== "loudness") ?? null }));
-      return setToast("已开启响度标准化（-14 LUFS），导出时自动修正");
+      return setToast(t("已开启响度标准化（-14 LUFS），导出时自动修正"));
     }
     if (issue.fix === "relink") {
       setMissingAssets(assets.filter((asset) => issue.id === `missing-${asset.id}`).map((asset) => asset.id));
@@ -1022,18 +1025,18 @@ export default function Home() {
     if (preset.platform) setPlatform(preset.platform);
     if (preset.ratio && preset.ratio !== ratio) {
       setRatio(preset.ratio);
-      setToast(`画布已改为 ${preset.ratio}；横版素材可用「智能转竖屏」自动取景`);
+      setToast(t("画布已改为 {ratio}；横版素材可用「智能转竖屏」自动取景", { ratio: preset.ratio }));
     }
   }
 
   async function startExport() {
-    if (!window.dashCutDesktop) return setToast("真实视频导出仅支持桌面版");
-    if (!project.clips.length) return setToast("请先把素材拖到时间轴");
-    if (project.clips.some((clip) => { const asset = assetMap.get(clip.assetId); return asset?.kind !== "text" && !asset?.sourcePath; })) return setToast("部分素材缺少本地路径，请重新导入");
+    if (!window.dashCutDesktop) return setToast(t("真实视频导出仅支持桌面版"));
+    if (!project.clips.length) return setToast(t("请先把素材拖到时间轴"));
+    if (project.clips.some((clip) => { const asset = assetMap.get(clip.assetId); return asset?.kind !== "text" && !asset?.sourcePath; })) return setToast(t("部分素材缺少本地路径，请重新导入"));
     setExporting(true);
     setExportResult(null);
     setProgress(0);
-    setProgressStage("正在准备导出");
+    setProgressStage(t("正在准备导出"));
     try {
       // Titles are rasterised with the preview's renderer at the export height so they look identical.
       const { height } = canvasSize(ratio, exportResolution);
@@ -1048,10 +1051,10 @@ export default function Home() {
       if (!result.canceled && result.outputPath) {
         setExportResult({ outputPath: result.outputPath, subtitleFiles: result.subtitleFiles ?? [] });
         setProgress(100);
-        setProgressStage("导出完成");
+        setProgressStage(t("导出完成"));
       }
     } catch (error) {
-      setToast(error instanceof Error ? error.message : "视频导出失败");
+      setToast(error instanceof Error ? error.message : t("视频导出失败"));
     } finally {
       setExporting(false);
     }
@@ -1061,7 +1064,7 @@ export default function Home() {
     const main = mainTrack(project).id;
     const clip = clipAt(project, main, current) ?? trackClips(project, main)[0];
     const asset = clip && assetMap.get(clip.assetId);
-    if (!clip || !asset) return setToast("主轨上没有画面");
+    if (!clip || !asset) return setToast(t("主轨上没有画面"));
     setCoverBackground(await captureFrame(asset, sourceTimeAt(clip, Math.max(current, clip.start))));
   }
 
@@ -1089,15 +1092,15 @@ export default function Home() {
       ctx.fillText("TRAVEL VLOG  ·  EP. 08", 126, 510);
       ctx.fillStyle = "rgba(255,255,255,.84)";
       ctx.font = "500 22px Arial, sans-serif";
-      ctx.fillText("DASHCUT 极剪原创视频", 126, 565);
+      ctx.fillText(t("DASHCUT 极剪原创视频"), 126, 565);
       if (download) {
         const data = canvas.toDataURL("image/png");
         setCoverImage(data);
         const link = document.createElement("a");
         link.href = data;
-        link.download = "视频封面.png";
+        link.download = t("视频封面.png");
         link.click();
-        setToast("封面图已保存");
+        setToast(t("封面图已保存"));
       }
     };
     if (coverBackground) {
@@ -1150,14 +1153,14 @@ export default function Home() {
   /* ------------------------------------------------------------ smart reframe */
 
   async function runReframe() {
-    if (!window.dashCutDesktop) return setToast("智能转竖屏仅支持桌面版");
+    if (!window.dashCutDesktop) return setToast(t("智能转竖屏仅支持桌面版"));
     const targets = (reframeOptions.scope === "selected" ? selectedClips : trackClips(project, mainTrack(project).id))
       .filter((clip) => assetMap.get(clip.assetId)?.kind === "video" && clip.freezeAt === null && !clip.reverse);
-    if (!targets.length) return setToast(reframeOptions.scope === "selected" ? "请先选择视频片段" : "主轨上没有可以转竖屏的视频");
+    if (!targets.length) return setToast(reframeOptions.scope === "selected" ? t("请先选择视频片段") : t("主轨上没有可以转竖屏的视频"));
     setReframeOpen(false);
     const canvasRatio = reframeOptions.switchCanvas ? "9:16" : ratio;
     try {
-      setBusy("正在加载人脸检测模型…");
+      setBusy(t("正在加载人脸检测模型…"));
       const { loadFaceDetector, trackSubject } = await import("./editor/face-tracking");
       const detector = await loadFaceDetector(() => window.dashCutDesktop!.faceModel());
       let next = project;
@@ -1165,7 +1168,7 @@ export default function Home() {
       let samples = 0;
       for (const [index, clip] of targets.entries()) {
         const asset = assetMap.get(clip.assetId)!;
-        const tracked = await trackSubject(asset, clip, detector, 0.25, (fraction) => setBusy(`正在跟踪主体 ${index + 1}/${targets.length} · ${Math.round(fraction * 100)}%`));
+        const tracked = await trackSubject(asset, clip, detector, 0.25, (fraction) => setBusy(t("正在跟踪主体 {current}/{total} · {percent}%", { current: index + 1, total: targets.length, percent: Math.round(fraction * 100) })));
         const quarter = clip.rotate90 === 90 || clip.rotate90 === 270;
         const mediaAspect = (asset.width * clip.crop.w) / (asset.height * clip.crop.h);
         const result = computeReframe(tracked, { mediaAspect: quarter ? 1 / mediaAspect : mediaAspect, canvasAspect: canvasRatio === "9:16" ? 9 / 16 : 16 / 9, tracking: reframeOptions.tracking });
@@ -1175,9 +1178,9 @@ export default function Home() {
       }
       commitWithView(next, { ratio: canvasRatio });
       setRatio(canvasRatio);
-      setToast(faces ? `已为 ${targets.length} 个片段生成跟随主体的竖屏取景（${Math.round((faces / samples) * 100)}% 画面检测到人脸），可在「画面」中微调关键帧` : "没有检测到人脸，已居中裁切；可在「画面」中手动调整位置");
+      setToast(faces ? t("已为 {count} 个片段生成跟随主体的竖屏取景（{percent}% 画面检测到人脸），可在「画面」中微调关键帧", { count: targets.length, percent: Math.round((faces / samples) * 100) }) : t("没有检测到人脸，已居中裁切；可在「画面」中手动调整位置"));
     } catch (error) {
-      setToast(error instanceof Error ? `智能转竖屏失败：${error.message}` : "智能转竖屏失败");
+      setToast(error instanceof Error ? t("智能转竖屏失败：{error}", { error: error.message }) : t("智能转竖屏失败"));
     } finally {
       setBusy("");
     }
@@ -1294,13 +1297,13 @@ export default function Home() {
       }
       if (event.type === "assistant") return pushAgent({ id: uid("msg"), kind: "assistant", text: event.text });
       if (event.type === "error") return pushAgent({ id: uid("msg"), kind: "error", text: event.message });
-      if (event.type === "stopped") return pushAgent({ id: uid("msg"), kind: "status", text: "已停止。已经应用的修改可以用撤销恢复。" });
+      if (event.type === "stopped") return pushAgent({ id: uid("msg"), kind: "status", text: t("已停止。已经应用的修改可以用撤销恢复。") });
       if (event.type === "tool-call" && event.name !== "propose_plan" && event.name !== "apply_edits") {
         return pushAgent({ id: `tool-${event.id}`, kind: "tool", name: event.name, status: "running", detail: "" });
       }
       if (event.type === "tool-result") {
         const result = event.result as { error?: string; ok?: boolean; issues?: Array<{ message: string }> } | null;
-        if (event.name === "apply_edits" && result?.ok === false) return pushAgent({ id: uid("msg"), kind: "status", text: `修改未通过校验，助手正在调整：${result.issues?.map((issue) => issue.message).slice(0, 2).join("；")}` });
+        if (event.name === "apply_edits" && result?.ok === false) return pushAgent({ id: uid("msg"), kind: "status", text: t("修改未通过校验，助手正在调整：{issues}", { issues: result.issues?.map((issue) => issue.message).slice(0, 2).join("；") ?? "" }) });
         setAgentMessages((items) => items.map((item) => item.id === `tool-${event.id}` && item.kind === "tool" ? { ...item, status: result?.error ? "failed" : "done", detail: result?.error ?? "" } : item));
       }
     });
@@ -1313,13 +1316,13 @@ export default function Home() {
   }
 
   function sendToAgent(text: string, skill?: AgentSkill) {
-    if (!window.dashCutDesktop) return setToast("极剪助手仅支持桌面版");
+    if (!window.dashCutDesktop) return setToast(t("极剪助手仅支持桌面版"));
     planApproved.current = false;
     pushAgent({ id: uid("msg"), kind: "user", text });
     setAgentRunning(true);
     window.dashCutDesktop.agentSend({ message: text, system: agentSystemPrompt(skill), tools: agentToolSpecs }).catch((error) => {
       setAgentRunning(false);
-      pushAgent({ id: uid("msg"), kind: "error", text: error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, "") : "发送失败" });
+      pushAgent({ id: uid("msg"), kind: "error", text: error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, "") : t("发送失败") });
     });
   }
 
@@ -1330,7 +1333,7 @@ export default function Home() {
   }
 
   function undoAgentEdit(id: string) {
-    if (editRevisions.current.get(id) !== history.revision) return setToast("这次修改之后还有其他编辑，请用 ⌘Z 逐步撤销");
+    if (editRevisions.current.get(id) !== history.revision) return setToast(t("这次修改之后还有其他编辑，请用 ⌘Z 逐步撤销"));
     undo();
     setAgentMessages((items) => items.map((item) => item.id === id && item.kind === "edits" ? { ...item, undone: true } : item));
   }
@@ -1345,7 +1348,7 @@ export default function Home() {
   function editorState(): EditorState {
     return {
       id: projectMeta.id,
-      title: projectMeta.title.trim() || "未命名项目",
+      title: projectMeta.title.trim() || t("未命名项目"),
       createdAt: projectMeta.createdAt,
       ratio,
       project,
@@ -1381,20 +1384,20 @@ export default function Home() {
   }, []);
 
   async function saveProject(saveAs: boolean) {
-    if (!window.dashCutDesktop) return setToast("保存项目仅支持桌面版");
-    if (recording !== "idle") return setToast("请先停止录音");
+    if (!window.dashCutDesktop) return setToast(t("保存项目仅支持桌面版"));
+    if (recording !== "idle") return setToast(t("请先停止录音"));
     const unsaved = assets.filter((asset) => !asset.sourcePath && usedAssets.has(asset.id));
-    if (unsaved.length) setToast(`${unsaved.length} 个素材没有本地路径，将不会被保存`);
+    if (unsaved.length) setToast(t("{count} 个素材没有本地路径，将不会被保存", { count: unsaved.length }));
     const state = editorState();
     try {
       const result = await window.dashCutDesktop.saveProject({ document: buildDocument(state), projectPath, saveAs });
       if (result.canceled || !result.projectPath) return false;
       setProjectPath(result.projectPath);
       setSavedFingerprint(fingerprint);
-      setToast(`项目已保存 · ${result.projectPath.split("/").pop()}`);
+      setToast(t("项目已保存 · {name}", { name: result.projectPath.split("/").pop() ?? "" }));
       return true;
     } catch (error) {
-      setToast(error instanceof Error ? `保存失败：${error.message}` : "保存失败");
+      setToast(error instanceof Error ? t("保存失败：{error}", { error: error.message }) : t("保存失败"));
       return false;
     }
   }
@@ -1404,7 +1407,7 @@ export default function Home() {
   }
 
   function confirmDiscard() {
-    return !dirty || window.confirm("当前项目有未保存的修改，继续将丢弃这些修改。确定继续吗？");
+    return !dirty || window.confirm(t("当前项目有未保存的修改，继续将丢弃这些修改。确定继续吗？"));
   }
 
   /** Swaps in a whole project: previews are rebuilt in the background and missing media prompts a relink. */
@@ -1450,16 +1453,16 @@ export default function Home() {
   }
 
   async function openProject(target?: string) {
-    if (!window.dashCutDesktop) return setToast("打开项目仅支持桌面版");
+    if (!window.dashCutDesktop) return setToast(t("打开项目仅支持桌面版"));
     if (!confirmDiscard()) return;
     try {
       const result = await window.dashCutDesktop.openProject(target);
       if (result.canceled || !result.document) return;
       const state = await documentToState(result.document);
       await loadEditorState(state, result.projectPath ?? "", result.missing ?? [], true);
-      setToast(result.missing?.length ? `项目已打开，${result.missing.length} 个素材需要重新定位` : `已打开「${state.title}」`);
+      setToast(result.missing?.length ? t("项目已打开，{count} 个素材需要重新定位", { count: result.missing.length }) : t("已打开「{title}」", { title: state.title }));
     } catch (error) {
-      setToast(error instanceof Error ? `无法打开项目：${error.message}` : "无法打开项目");
+      setToast(error instanceof Error ? t("无法打开项目：{error}", { error: error.message }) : t("无法打开项目"));
     }
   }
 
@@ -1478,9 +1481,9 @@ export default function Home() {
       const state = await documentToState(payload.document);
       await loadEditorState(state, payload.projectPath, payload.missing, false);
       setRecoveries([]);
-      setToast(`已恢复「${state.title}」，请保存项目`);
+      setToast(t("已恢复「{title}」，请保存项目", { title: state.title }));
     } catch (error) {
-      setToast(error instanceof Error ? `恢复失败：${error.message}` : "恢复失败");
+      setToast(error instanceof Error ? t("恢复失败：{error}", { error: error.message }) : t("恢复失败"));
     }
   }
 
@@ -1504,7 +1507,7 @@ export default function Home() {
       void refreshPreviews(next);
     });
     setMissingAssets((ids) => ids.filter((id) => !updates.some((item) => item.asset.id === id)));
-    setToast(`已重新定位 ${updates.length} 个素材`);
+    setToast(t("已重新定位 {count} 个素材", { count: updates.length }));
   }
 
   useEffect(() => {
@@ -1540,43 +1543,43 @@ export default function Home() {
   /* ------------------------------------------------------------ render */
 
   const mediaPanel = <>
-    <button className="upload-card" onClick={() => fileInputRef.current?.click()}><span>＋</span><strong>导入素材</strong><small>视频、图片、动图、音频可混合多选</small></button>
-    <div className="media-filters">{(["all", "video", "image", "audio"] as const).map((filter) => <button key={filter} className={mediaFilter === filter ? "active" : ""} onClick={() => setMediaFilter(filter)}>{filter === "all" ? `全部 ${assets.length}` : filter === "image" ? "图片" : kindLabels[filter]}</button>)}</div>
-    <div className="asset-grid">{filteredAssets.map((asset) => <div key={asset.id} className={`asset-card${usedAssets.has(asset.id) ? " used" : ""}`} draggable onDragStart={(event) => { event.dataTransfer.setData("application/x-dashcut-asset", asset.id); event.dataTransfer.effectAllowed = "copy"; setDraggingAssetId(asset.id); }} onDragEnd={() => setDraggingAssetId(null)} onDoubleClick={() => appendAsset(asset)} title="拖到时间轴，或双击添加到末尾">
+    <button className="upload-card" onClick={() => fileInputRef.current?.click()}><span>＋</span><strong>{t("导入素材")}</strong><small>{t("视频、图片、动图、音频可混合多选")}</small></button>
+    <div className="media-filters">{(["all", "video", "image", "audio"] as const).map((filter) => <button key={filter} className={mediaFilter === filter ? "active" : ""} onClick={() => setMediaFilter(filter)}>{filter === "all" ? t("全部 {count}", { count: assets.length }) : filter === "image" ? t("图片") : t(kindLabels[filter])}</button>)}</div>
+    <div className="asset-grid">{filteredAssets.map((asset) => <div key={asset.id} className={`asset-card${usedAssets.has(asset.id) ? " used" : ""}`} draggable onDragStart={(event) => { event.dataTransfer.setData("application/x-dashcut-asset", asset.id); event.dataTransfer.effectAllowed = "copy"; setDraggingAssetId(asset.id); }} onDragEnd={() => setDraggingAssetId(null)} onDoubleClick={() => appendAsset(asset)} title={t("拖到时间轴，或双击添加到末尾")}>
       <div className="asset-thumb" style={asset.thumbnail ? { backgroundImage: `url("${asset.thumbnail}")` } : undefined}>
         {asset.kind === "audio" && <Icon name="music" size={22} />}
-        <span className="asset-kind">{kindLabels[asset.kind]}</span>
+        <span className="asset-kind">{t(kindLabels[asset.kind])}</span>
         {asset.kind !== "image" && <span className="asset-duration">{formatClock(asset.duration, false)}</span>}
-        {usedAssets.has(asset.id) && <span className="asset-used">已添加</span>}
-        <button className="asset-add" title="添加到时间轴" onClick={() => appendAsset(asset)}><Icon name="plus" size={13} /></button>
-        <button className="asset-remove" title="从素材库移除" onClick={() => removeAsset(asset)}>×</button>
+        {usedAssets.has(asset.id) && <span className="asset-used">{t("已添加")}</span>}
+        <button className="asset-add" title={t("添加到时间轴")} onClick={() => appendAsset(asset)}><Icon name="plus" size={13} /></button>
+        <button className="asset-remove" title={t("从素材库移除")} onClick={() => removeAsset(asset)}>×</button>
       </div>
       <strong>{asset.name}</strong>
     </div>)}</div>
-    {!assets.length && <p className="empty-hint">导入的素材会按导入顺序显示在这里，不会自动放入时间轴。把素材拖到时间轴的轨道上即可使用；拖到轨道上方的空白处会新建画中画轨，用来叠加图片和视频。</p>}
+    {!assets.length && <p className="empty-hint">{t("导入的素材会按导入顺序显示在这里，不会自动放入时间轴。把素材拖到时间轴的轨道上即可使用；拖到轨道上方的空白处会新建画中画轨，用来叠加图片和视频。")}</p>}
   </>;
 
   const percent = captionProgress ? Math.round(captionProgress.progress * 100) : 0;
   const subtitlesPanel = <>
-    <div className="language-switch"><button className={subtitleMode === "zh" ? "active" : ""} onClick={() => setSubtitleMode("zh")}>中文</button><button className={subtitleMode === "en" ? "active" : ""} onClick={() => setSubtitleMode("en")}>English</button><button className={subtitleMode === "both" ? "active" : ""} onClick={() => setSubtitleMode("both")}>中英双语</button></div>
-    <div className="engine-switch"><button className={recognitionEngine === "cloud" ? "active" : ""} onClick={() => setRecognitionEngine("cloud")}><b>☁</b><span>云端模型<small>需要网络 · 估算时间</small></span></button><button className={recognitionEngine === "local" ? "active" : ""} onClick={() => { setRecognitionEngine("local"); void checkHardware(); }}><b>⌁</b><span>本地模型<small>离线 · 精确时间</small></span></button></div>
+    <div className="language-switch"><button className={subtitleMode === "zh" ? "active" : ""} onClick={() => setSubtitleMode("zh")}>{t("中文")}</button><button className={subtitleMode === "en" ? "active" : ""} onClick={() => setSubtitleMode("en")}>English</button><button className={subtitleMode === "both" ? "active" : ""} onClick={() => setSubtitleMode("both")}>{t("中英双语")}</button></div>
+    <div className="engine-switch"><button className={recognitionEngine === "cloud" ? "active" : ""} onClick={() => setRecognitionEngine("cloud")}><b>☁</b><span>{t("云端模型")}<small>{t("需要网络 · 估算时间")}</small></span></button><button className={recognitionEngine === "local" ? "active" : ""} onClick={() => { setRecognitionEngine("local"); void checkHardware(); }}><b>⌁</b><span>{t("本地模型")}<small>{t("离线 · 精确时间")}</small></span></button></div>
     <details className="ai-settings" open={!aiConfig.baseUrl || !aiConfig.model}>
-      <summary>API 设置{aiConfig.model ? ` · ${aiConfig.model}` : ""}</summary>
+      <summary>{t("API 设置")}{aiConfig.model ? ` · ${aiConfig.model}` : ""}</summary>
       <label>API Base URL<input value={aiConfig.baseUrl} placeholder="https://…/v1" disabled={isGenerating || loadingAiModels} onChange={(event) => { setAiModels([]); setAiConfig({ ...aiConfig, baseUrl: event.target.value }); }} /></label>
-      <label>API Key<input type="password" autoComplete="off" value={aiConfig.apiKey} disabled={isGenerating || loadingAiModels} onChange={(event) => setAiConfig({ ...aiConfig, apiKey: event.target.value })} placeholder="仅本次会话使用，不保存到磁盘" /></label>
-      <label>模型<span className="model-picker"><input list="ai-models" value={aiConfig.model} placeholder="选择或输入模型 ID" disabled={isGenerating} onChange={(event) => setAiConfig({ ...aiConfig, model: event.target.value })} /><button className="ghost-action" disabled={loadingAiModels || isGenerating} onClick={() => void refreshAiModels()}>{loadingAiModels ? "查询中…" : aiModels.length ? `刷新 (${aiModels.length})` : "查询"}</button></span><datalist id="ai-models">{aiModels.map((model) => <option key={model.id} value={model.id} />)}</datalist></label>
-      {recognitionEngine === "local" && <label className="ai-checkbox"><input type="checkbox" checked={autoTranslate} disabled={isGenerating} onChange={(event) => setAutoTranslate(event.target.checked)} />识别后自动生成中英译文</label>}
-      <small>{recognitionEngine === "cloud" ? "云端识别会上传音轨，需选择支持音频输入的模型。" : autoTranslate ? "本地识别后仅将字幕文本发送到接口翻译。" : "关闭自动翻译时，本地识别完全离线。"}</small>
-      <button className="ghost-action" disabled={isGenerating || !project.subtitles.length} onClick={() => void translateExistingSubtitles()}>翻译当前字幕 · 保留时间戳</button>
+      <label>API Key<input type="password" autoComplete="off" value={aiConfig.apiKey} disabled={isGenerating || loadingAiModels} onChange={(event) => setAiConfig({ ...aiConfig, apiKey: event.target.value })} placeholder={t("仅本次会话使用，不保存到磁盘")} /></label>
+      <label>{t("模型")}<span className="model-picker"><input list="ai-models" value={aiConfig.model} placeholder={t("选择或输入模型 ID")} disabled={isGenerating} onChange={(event) => setAiConfig({ ...aiConfig, model: event.target.value })} /><button className="ghost-action" disabled={loadingAiModels || isGenerating} onClick={() => void refreshAiModels()}>{loadingAiModels ? t("查询中…") : aiModels.length ? t("刷新 ({count})", { count: aiModels.length }) : t("查询")}</button></span><datalist id="ai-models">{aiModels.map((model) => <option key={model.id} value={model.id} />)}</datalist></label>
+      {recognitionEngine === "local" && <label className="ai-checkbox"><input type="checkbox" checked={autoTranslate} disabled={isGenerating} onChange={(event) => setAutoTranslate(event.target.checked)} />{t("识别后自动生成中英译文")}</label>}
+      <small>{recognitionEngine === "cloud" ? t("云端识别会上传音轨，需选择支持音频输入的模型。") : autoTranslate ? t("本地识别后仅将字幕文本发送到接口翻译。") : t("关闭自动翻译时，本地识别完全离线。")}</small>
+      <button className="ghost-action" disabled={isGenerating || !project.subtitles.length} onClick={() => void translateExistingSubtitles()}>{t("翻译当前字幕 · 保留时间戳")}</button>
     </details>
-    {recognitionEngine === "local" && <label className="hotwords-field">专有名词<input value={hotwords} disabled={isGenerating} placeholder="人名、品牌、术语，空格分隔" onChange={(event) => setHotwords(event.target.value)} /></label>}
+    {recognitionEngine === "local" && <label className="hotwords-field">{t("专有名词")}<input value={hotwords} disabled={isGenerating} placeholder={t("人名、品牌、术语，空格分隔")} onChange={(event) => setHotwords(event.target.value)} /></label>}
     <button className={`generate-button${isGenerating ? " running" : ""}`} onClick={() => void generateSubtitles()} disabled={isGenerating}>
       <span>{isGenerating ? "◌" : "✦"}</span>
-      <strong>{isGenerating ? `正在识别 ${percent}%` : "识别字幕"}</strong>
-      <small>{isGenerating ? captionProgress?.stage || "正在准备" : "普通话 / English · 自动断句"}</small>
+      <strong>{isGenerating ? t("正在识别 {percent}%", { percent }) : t("识别字幕")}</strong>
+      <small>{isGenerating ? captionProgress?.stage || t("正在准备") : t("普通话 / English · 自动断句")}</small>
       {isGenerating && <i className="caption-progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}><i style={{ width: `${percent}%` }} /></i>}
     </button>
-    <div className="recognition-meta"><span><i></i> {recognitionEngine === "cloud" ? "云端识别 · 估算时间" : hardware?.assessment.tier === "recommended" ? "本地模式 · 推荐配置" : "本地模式 · 需要检测"}</span><button onClick={() => setStyleOpen(!styleOpen)}>字幕样式 {styleOpen ? "⌃" : "⌄"}</button></div>
+    <div className="recognition-meta"><span><i></i> {recognitionEngine === "cloud" ? t("云端识别 · 估算时间") : hardware?.assessment.tier === "recommended" ? t("本地模式 · 推荐配置") : t("本地模式 · 需要检测")}</span><button onClick={() => setStyleOpen(!styleOpen)}>{t("字幕样式")} {styleOpen ? "⌃" : "⌄"}</button></div>
     {styleOpen && <CaptionStyleEditor style={subtitleStyle} onChange={setSubtitleStyle} />}
     {project.subtitles.length > 0 && <CaptionTimingBar disabled={isGenerating} selected={selectedSubtitle !== null && project.subtitles.some((item) => item.id === selectedSubtitle)} onShift={shiftCaptions} />}
     <div className="subtitle-list">
@@ -1584,10 +1587,10 @@ export default function Home() {
         <time>{formatClock(item.start).slice(0, 5)}</time><div>
           {subtitleMode !== "en" && <input disabled={isGenerating} value={item.zh} onChange={(event) => updateSubtitle(item.id, "zh", event.target.value)} />}
           {subtitleMode !== "zh" && <input disabled={isGenerating} className="translation" value={item.en} onChange={(event) => updateSubtitle(item.id, "en", event.target.value)} />}
-          <div className="subtitle-timing" onClick={(event) => event.stopPropagation()}>{(["start", "end"] as const).map((field) => <label key={field}>{field === "start" ? "起" : "止"}<input key={item[field]} aria-label={`${field === "start" ? "开始" : "结束"}时间（秒）`} type="number" min="0" step="0.1" defaultValue={item[field].toFixed(2)} disabled={isGenerating} onBlur={(event) => { if (!updateSubtitleTime(item.id, field, event.currentTarget.valueAsNumber)) event.currentTarget.value = item[field].toFixed(2); }} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }} /></label>)}</div>
-        </div><button title="删除字幕" onClick={(event) => { event.stopPropagation(); setSubtitles(project.subtitles.filter((subtitle) => subtitle.id !== item.id)); }}>×</button>
+          <div className="subtitle-timing" onClick={(event) => event.stopPropagation()}>{(["start", "end"] as const).map((field) => <label key={field}>{field === "start" ? t("起") : t("止")}<input key={item[field]} aria-label={field === "start" ? t("开始时间（秒）") : t("结束时间（秒）")} type="number" min="0" step="0.1" defaultValue={item[field].toFixed(2)} disabled={isGenerating} onBlur={(event) => { if (!updateSubtitleTime(item.id, field, event.currentTarget.valueAsNumber)) event.currentTarget.value = item[field].toFixed(2); }} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }} /></label>)}</div>
+        </div><button title={t("删除字幕")} onClick={(event) => { event.stopPropagation(); setSubtitles(project.subtitles.filter((subtitle) => subtitle.id !== item.id)); }}>×</button>
       </div>)}
-      {!project.subtitles.length && <p className="empty-hint">把含人声的视频或音频拖到时间轴，选择识别模型后生成字幕。</p>}
+      {!project.subtitles.length && <p className="empty-hint">{t("把含人声的视频或音频拖到时间轴，选择识别模型后生成字幕。")}</p>}
     </div>
   </>;
 
@@ -1601,41 +1604,41 @@ export default function Home() {
       <div className="brand"><span className="brand-mark"><i></i><i></i></span><strong>DashCut <em>极剪</em></strong></div>
       <div className="project-title">
         <div className="project-menu">
-          <button className="project-menu-button" title="项目菜单" onClick={() => { setProjectMenuOpen(!projectMenuOpen); if (!projectMenuOpen) void refreshRecent(); }}><Icon name="film" size={14} /></button>
+          <button className="project-menu-button" title={t("项目菜单")} onClick={() => { setProjectMenuOpen(!projectMenuOpen); if (!projectMenuOpen) void refreshRecent(); }}><Icon name="film" size={14} /></button>
           {projectMenuOpen && <div className="project-popover" onMouseLeave={() => setProjectMenuOpen(false)}>
-            <button onClick={() => { setProjectMenuOpen(false); void newProject(); }}>新建项目<kbd>⌘N</kbd></button>
-            <button onClick={() => { setProjectMenuOpen(false); void openProject(); }}>打开项目…<kbd>⌘O</kbd></button>
-            <button onClick={() => { setProjectMenuOpen(false); void saveProject(false); }}>保存<kbd>⌘S</kbd></button>
-            <button onClick={() => { setProjectMenuOpen(false); void saveProject(true); }}>另存为…<kbd>⇧⌘S</kbd></button>
-            {recentProjects.length > 0 && <><b>最近项目</b>{recentProjects.map((item) => <button key={item.path} className={item.exists ? "" : "missing"} title={item.path} onClick={() => { setProjectMenuOpen(false); if (item.exists) void openProject(item.path); else void window.dashCutDesktop?.removeRecentProject(item.path).then(refreshRecent); }}>{item.title}<small>{item.exists ? item.path.split("/").slice(-2, -1)[0] : "文件已移动，点击移除"}</small></button>)}</>}
+            <button onClick={() => { setProjectMenuOpen(false); void newProject(); }}>{t("新建项目")}<kbd>⌘N</kbd></button>
+            <button onClick={() => { setProjectMenuOpen(false); void openProject(); }}>{t("打开项目…")}<kbd>⌘O</kbd></button>
+            <button onClick={() => { setProjectMenuOpen(false); void saveProject(false); }}>{t("保存")}<kbd>⌘S</kbd></button>
+            <button onClick={() => { setProjectMenuOpen(false); void saveProject(true); }}>{t("另存为…")}<kbd>⇧⌘S</kbd></button>
+            {recentProjects.length > 0 && <><b>{t("最近项目")}</b>{recentProjects.map((item) => <button key={item.path} className={item.exists ? "" : "missing"} title={item.path} onClick={() => { setProjectMenuOpen(false); if (item.exists) void openProject(item.path); else void window.dashCutDesktop?.removeRecentProject(item.path).then(refreshRecent); }}>{item.title}<small>{item.exists ? item.path.split("/").slice(-2, -1)[0] : t("文件已移动，点击移除")}</small></button>)}</>}
           </div>}
         </div>
-        <div><input className="project-name" aria-label="项目名称" value={projectMeta.title} onChange={(event) => setProjectMeta((meta) => ({ ...meta, title: event.target.value }))} onBlur={(event) => { if (!event.target.value.trim()) setProjectMeta((meta) => ({ ...meta, title: "未命名项目" })); }} /><span>{dirty ? "未保存" : projectPath ? "已保存" : "未保存到磁盘"} · {formatClock(duration, false)} · {project.clips.length} 个片段</span></div>
+        <div><input className="project-name" aria-label={t("项目名称")} value={projectMeta.title} onChange={(event) => setProjectMeta((meta) => ({ ...meta, title: event.target.value }))} onBlur={(event) => { if (!event.target.value.trim()) setProjectMeta((meta) => ({ ...meta, title: t("未命名项目") })); }} /><span>{dirty ? t("未保存") : projectPath ? t("已保存") : t("未保存到磁盘")} · {formatClock(duration, false)} · {t("{count} 个片段", { count: project.clips.length })}</span></div>
       </div>
-      <div className="top-actions"><button className="language-toggle" title={t("切换界面语言")} onClick={() => switchLanguage(language === "zh" ? "en" : "zh")}><b className={language === "zh" ? "on" : ""}>中</b><b className={language === "en" ? "on" : ""}>EN</b></button><button className="ghost hide-mobile" onClick={() => setAboutOpen(true)}>关于与许可</button><button className={`agent-button${agentOpen ? " active" : ""}`} title="极剪助手（⌘J）" onClick={() => agentOpen ? setAgentOpen(false) : void openAgent()}>✦ 极剪助手</button><button className="export-button" onClick={() => setExportOpen(true)}>导出视频 <span>↗</span></button></div>
+      <div className="top-actions"><button className="language-toggle" title={t("切换界面语言")} onClick={() => switchLanguage(language === "zh" ? "en" : "zh")}><b className={language === "zh" ? "on" : ""}>中</b><b className={language === "en" ? "on" : ""}>EN</b></button><button className="ghost hide-mobile" onClick={() => setAboutOpen(true)}>{t("关于与许可")}</button><button className={`agent-button${agentOpen ? " active" : ""}`} title={t("极剪助手（⌘J）")} onClick={() => agentOpen ? setAgentOpen(false) : void openAgent()}>✦ {t("极剪助手")}</button><button className="export-button" onClick={() => setExportOpen(true)}>{t("导出视频")} <span>↗</span></button></div>
     </header>
 
     <section className="workspace">
       <aside className="side-panel">
-        <nav className="panel-tabs"><button className={leftTab === "media" ? "active" : ""} onClick={() => setLeftTab("media")}><Icon name="film" size={14} />素材</button><button className={leftTab === "text" ? "active" : ""} onClick={() => setLeftTab("text")}><Icon name="text" size={14} />文本</button><button className={leftTab === "transcript" ? "active" : ""} onClick={() => setLeftTab("transcript")}><Icon name="talk" size={14} />文稿</button><button className={leftTab === "subtitles" ? "active" : ""} onClick={() => setLeftTab("subtitles")}><b>字</b>自动字幕</button></nav>
+        <nav className="panel-tabs"><button className={leftTab === "media" ? "active" : ""} onClick={() => setLeftTab("media")}><Icon name="film" size={14} />{t("素材")}</button><button className={leftTab === "text" ? "active" : ""} onClick={() => setLeftTab("text")}><Icon name="text" size={14} />{t("文本")}</button><button className={leftTab === "transcript" ? "active" : ""} onClick={() => setLeftTab("transcript")}><Icon name="talk" size={14} />{t("文稿")}</button><button className={leftTab === "subtitles" ? "active" : ""} onClick={() => setLeftTab("subtitles")}><b>{t("字")}</b>{t("自动字幕")}</button></nav>
         <div className="panel-scroll">{leftTab === "media" ? mediaPanel : leftTab === "text" ? <>
-          <p className="empty-hint">点击添加到播放头位置；选中后在右侧「文本」中修改文字和样式。</p>
-          <div className="text-presets-grid">{textPresets.map((preset) => <button key={preset.id} onClick={() => addText(preset.style)} title="添加到播放头">
+          <p className="empty-hint">{t("点击添加到播放头位置；选中后在右侧「文本」中修改文字和样式。")}</p>
+          <div className="text-presets-grid">{textPresets.map((preset) => <button key={preset.id} onClick={() => addText(preset.style)} title={t("添加到播放头")}>
             <b style={{ fontFamily: preset.style.fontFamily ?? defaultTextStyle.fontFamily, fontWeight: preset.style.bold === false ? 400 : 700, fontStyle: preset.style.italic ? "italic" : "normal", color: preset.style.color ?? "#fff", WebkitTextStroke: preset.style.strokeWidth ? `1px ${preset.style.strokeColor}` : undefined, background: preset.style.backgroundOpacity ? preset.style.backgroundColor : "transparent" }}>Aa</b>
-            <span>{preset.label}</span>
+            <span>{t(preset.label)}</span>
           </button>)}</div>
         </> : leftTab === "transcript" ? <TranscriptPanel blocks={transcriptBlocks} time={current} flagged={flaggedWords} busy={isGenerating} canTranscribe={captionSources().length > 0} onSeek={seek} onDelete={deleteTranscriptWords} onTranscribe={() => void generateSubtitles(true)} onCleanCut={() => void smartTalk()} /> : subtitlesPanel}</div>
       </aside>
 
       <section className="stage">
-        <div className="stage-toolbar"><span>{busy || (hoverTime !== null && toggles.previewAxis && !playing ? `预览轴 ${formatClock(hoverTime)}` : "")}</span><div className="stage-actions"><button className="ghost-action reframe-button" title="跟随人脸自动裁切为竖屏" onClick={() => setReframeOpen(true)}>✦ 智能转竖屏</button><div className="segmented ratio-switch"><button className={ratio === "16:9" ? "active" : ""} onClick={() => setRatio("16:9")}>16:9 横屏</button><button className={ratio === "9:16" ? "active" : ""} onClick={() => setRatio("9:16")}>9:16 竖屏</button></div></div></div>
+        <div className="stage-toolbar"><span>{busy || (hoverTime !== null && toggles.previewAxis && !playing ? t("预览轴 {time}", { time: formatClock(hoverTime) }) : "")}</span><div className="stage-actions"><button className="ghost-action reframe-button" title={t("跟随人脸自动裁切为竖屏")} onClick={() => setReframeOpen(true)}>✦ {t("智能转竖屏")}</button><div className="segmented ratio-switch"><button className={ratio === "16:9" ? "active" : ""} onClick={() => setRatio("16:9")}>{t("16:9 横屏")}</button><button className={ratio === "9:16" ? "active" : ""} onClick={() => setRatio("9:16")}>{t("9:16 竖屏")}</button></div></div></div>
         <Preview project={project} assets={assetMap} time={previewTime} rate={playing ? shuttle : 0} muted={muted} ratio={ratio} subtitleMode={subtitleMode} subtitleStyle={subtitleStyle} onImport={() => fileInputRef.current?.click()} />
-        <div className="player-controls"><span>{formatClock(current, true, exportFps)} <i>/ {formatClock(duration, true, exportFps)}</i>{playing && shuttle !== 1 && <em className="shuttle-badge">{shuttle > 0 ? "▶" : "◀"} {Math.abs(shuttle)}×</em>}</span><div><button title="回到开头" onClick={() => seek(0)}><Icon name="prev" size={14} /></button><button data-play-toggle className="play" onClick={togglePlay} title="播放 / 暂停（空格）"><Icon name={playing ? "pause" : "play"} size={14} /></button><button title="跳到结尾" onClick={() => seek(duration)}><Icon name="next" size={14} /></button></div><div><LoudnessMeter active={playing && !muted} target={loudnessTarget} /><button title={muted ? "取消静音" : "静音预览"} onClick={() => setMuted(!muted)}><Icon name={muted ? "mute" : "volume"} size={15} /></button><button title="全屏预览" onClick={() => void document.querySelector(".video-frame")?.requestFullscreen()}><Icon name="fullscreen" size={14} /></button></div></div>
+        <div className="player-controls"><span>{formatClock(current, true, exportFps)} <i>/ {formatClock(duration, true, exportFps)}</i>{playing && shuttle !== 1 && <em className="shuttle-badge">{shuttle > 0 ? "▶" : "◀"} {Math.abs(shuttle)}×</em>}</span><div><button title={t("回到开头")} onClick={() => seek(0)}><Icon name="prev" size={14} /></button><button data-play-toggle className="play" onClick={togglePlay} title={t("播放 / 暂停（空格）")}><Icon name={playing ? "pause" : "play"} size={14} /></button><button title={t("跳到结尾")} onClick={() => seek(duration)}><Icon name="next" size={14} /></button></div><div><LoudnessMeter active={playing && !muted} target={loudnessTarget} /><button title={muted ? t("取消静音") : t("静音预览")} onClick={() => setMuted(!muted)}><Icon name={muted ? "mute" : "volume"} size={15} /></button><button title={t("全屏预览")} onClick={() => void document.querySelector(".video-frame")?.requestFullscreen()}><Icon name="fullscreen" size={14} /></button></div></div>
       </section>
 
       {agentOpen
         ? <AgentPanel messages={agentMessages} running={agentRunning} config={agentConfig} skills={agentSkills} onSend={sendToAgent} onStop={() => void window.dashCutDesktop?.agentStop()} onReset={() => void resetAgent()} onPlan={decidePlan} onUndo={undoAgentEdit}
-            onSaveConfig={async (config) => { if (!window.dashCutDesktop) return; try { setAgentConfig(await window.dashCutDesktop.saveAgentConfig(config)); setToast("助手设置已保存"); } catch (error) { setToast(error instanceof Error ? error.message : "保存失败"); } }} onClose={() => setAgentOpen(false)} />
+            onSaveConfig={async (config) => { if (!window.dashCutDesktop) return; try { setAgentConfig(await window.dashCutDesktop.saveAgentConfig(config)); setToast(t("助手设置已保存")); } catch (error) { setToast(error instanceof Error ? error.message : t("保存失败")); } }} onClose={() => setAgentOpen(false)} />
         : <Inspector clip={primaryClip} asset={primaryAsset} tab={inspectorTab} time={current} transitionAllowed={transitionAllowed} onTab={setInspectorTab} onChange={changeClip} onCrop={() => runAction("crop")} onSeek={seek} />}
     </section>
 
@@ -1652,87 +1655,87 @@ export default function Home() {
         onSubtitleChange={(id, patch) => setSubtitles(project.subtitles.map((item) => item.id === id ? { ...item, ...patch } : item).sort((a, b) => a.start - b.start))} />
     </section>
 
-    {typeof recording === "number" && <div className="countdown-overlay"><span>{recording}</span><small>即将开始录音</small></div>}
+    {typeof recording === "number" && <div className="countdown-overlay"><span>{recording}</span><small>{t("即将开始录音")}</small></div>}
 
     {cropClip && cropAsset && <CropModal clip={cropClip} asset={cropAsset} onClose={() => setCropOpen(false)} onApply={(crop) => { commit((state) => updateClip(state, cropClip.id, { crop }, options)); setCropOpen(false); }} />}
 
     {coverOpen && <div className="modal-backdrop" onMouseDown={() => setCoverOpen(false)}><section className="cover-modal" onMouseDown={(event) => event.stopPropagation()}>
-      <header><div><span className="eyebrow">COVER STUDIO</span><h2>编辑封面</h2></div><button onClick={() => setCoverOpen(false)}>×</button></header>
+      <header><div><span className="eyebrow">COVER STUDIO</span><h2>{t("编辑封面")}</h2></div><button onClick={() => setCoverOpen(false)}>×</button></header>
       <div className="cover-workspace"><div className="canvas-wrap"><canvas ref={canvasRef}></canvas><span>1280 × 720 · 16:9</span></div><aside>
-        <label>封面标题<input value={coverTitle} maxLength={24} onChange={(event) => setCoverTitle(event.target.value)} /></label>
-        <label>强调色<div className="color-options">{["#ffcc45", "#56e0c7", "#ff7289", "#8ba8ff"].map((color) => <button key={color} className={coverAccent === color ? "active" : ""} style={{ background: color }} onClick={() => setCoverAccent(color)} />)}</div></label>
-        <label>背景<div className="platform-preview"><button className={coverBackground ? "" : "active"} onClick={() => setCoverBackground("")}>渐变预设</button><button className={coverBackground ? "active" : ""} onClick={() => void applyCurrentFrameToCover()}>当前画面</button></div></label>
-        <button className="primary full" onClick={() => renderCover(true)}>保存封面 PNG</button>
+        <label>{t("封面标题")}<input value={coverTitle} maxLength={24} onChange={(event) => setCoverTitle(event.target.value)} /></label>
+        <label>{t("强调色")}<div className="color-options">{["#ffcc45", "#56e0c7", "#ff7289", "#8ba8ff"].map((color) => <button key={color} className={coverAccent === color ? "active" : ""} style={{ background: color }} onClick={() => setCoverAccent(color)} />)}</div></label>
+        <label>{t("背景")}<div className="platform-preview"><button className={coverBackground ? "" : "active"} onClick={() => setCoverBackground("")}>{t("渐变预设")}</button><button className={coverBackground ? "active" : ""} onClick={() => void applyCurrentFrameToCover()}>{t("当前画面")}</button></div></label>
+        <button className="primary full" onClick={() => renderCover(true)}>{t("保存封面 PNG")}</button>
       </aside></div>
     </section></div>}
 
     {exportOpen && <div className="modal-backdrop export-backdrop" onMouseDown={() => !exporting && setExportOpen(false)}><section className="export-modal" onMouseDown={(event) => event.stopPropagation()}>
-      <header><div><span className="eyebrow">EXPORT</span><h2>导出</h2></div><button onClick={() => !exporting && setExportOpen(false)}>×</button></header>
-      {exporting || exportResult ? <div className="export-progress"><div className="progress-ring" style={{ "--progress": `${progress * 3.6}deg` } as React.CSSProperties}><span>{progress}%</span></div><h3>{exportResult ? "导出完成" : "正在渲染视频"}</h3><p>{exportResult ? (exportResult.subtitleFiles.length ? `已生成 ${formatLabels[exportFormat]}、中文 SRT 和英文 SRT` : `已生成 ${formatLabels[exportFormat]}`) : progressStage}</p>{exportResult && <div className="export-complete-actions"><button className="primary" onClick={() => window.dashCutDesktop?.revealExport(exportResult.outputPath)}>打开文件位置</button><button className="ghost-action" onClick={() => { setExportResult(null); setProgress(0); }}>继续导出</button></div>}</div> : <div className="export-form">
+      <header><div><span className="eyebrow">EXPORT</span><h2>{t("导出")}</h2></div><button onClick={() => !exporting && setExportOpen(false)}>×</button></header>
+      {exporting || exportResult ? <div className="export-progress"><div className="progress-ring" style={{ "--progress": `${progress * 3.6}deg` } as React.CSSProperties}><span>{progress}%</span></div><h3>{exportResult ? t("导出完成") : t("正在渲染视频")}</h3><p>{exportResult ? (exportResult.subtitleFiles.length ? t("已生成 {format}、中文 SRT 和英文 SRT", { format: t(formatLabels[exportFormat]) }) : t("已生成 {format}", { format: t(formatLabels[exportFormat]) })) : progressStage}</p>{exportResult && <div className="export-complete-actions"><button className="primary" onClick={() => window.dashCutDesktop?.revealExport(exportResult.outputPath)}>{t("打开文件位置")}</button><button className="ghost-action" onClick={() => { setExportResult(null); setProgress(0); }}>{t("继续导出")}</button></div>}</div> : <div className="export-form">
         <div className="export-presets">{exportPresets.map((preset) => {
           const active = preset.format === exportFormat && (preset.format !== "mp4" || (preset.codec === exportCodec && preset.resolution === exportResolution && preset.fps === exportFps && preset.ratio === ratio));
-          return <button key={preset.id} className={active ? "active" : ""} onClick={() => applyExportPreset(preset)}><b>{preset.label}</b><small>{preset.note}</small></button>;
+          return <button key={preset.id} className={active ? "active" : ""} onClick={() => applyExportPreset(preset)}><b>{t(preset.label)}</b><small>{t(preset.note)}</small></button>;
         })}</div>
         <div className="export-grid">
-          <label>格式<select value={exportFormat} onChange={(event) => setExportFormat(event.target.value as CompositionOutput["format"])}>{(Object.keys(formatLabels) as Array<CompositionOutput["format"]>).map((format) => <option key={format} value={format}>{formatLabels[format]}</option>)}</select></label>
-          {(exportFormat === "mp4" || exportFormat === "mov") && <label>编码<div className="segmented"><button className={exportCodec === "h264" ? "active" : ""} onClick={() => setExportCodec("h264")}>H.264 兼容</button><button className={exportCodec === "hevc" ? "active" : ""} onClick={() => setExportCodec("hevc")}>HEVC 小体积</button></div></label>}
-          {(exportFormat === "mp4" || exportFormat === "mov") && <label>分辨率<select value={exportResolution} onChange={(event) => setExportResolution(Number(event.target.value) as 720 | 1080 | 2160)}><option value="1080">1080P</option><option value="2160">4K</option><option value="720">720P</option></select></label>}
-          {(exportFormat === "mp4" || exportFormat === "mov") && <label>帧率<div className="segmented"><button className={exportFps === 30 ? "active" : ""} onClick={() => setExportFps(30)}>30 FPS</button><button className={exportFps === 60 ? "active" : ""} onClick={() => setExportFps(60)}>60 FPS</button></div></label>}
-          {exportFormat !== "gif" && <label>响度标准化<select value={loudnessTarget === null ? "off" : String(loudnessTarget)} onChange={(event) => setLoudnessTarget(event.target.value === "off" ? null : Number(event.target.value))}><option value="-14">-14 LUFS · YouTube / B 站</option><option value="-16">-16 LUFS · 播客 / 移动端</option><option value="-23">-23 LUFS · 广播 EBU R128</option><option value="off">关闭</option></select></label>}
+          <label>{t("格式")}<select value={exportFormat} onChange={(event) => setExportFormat(event.target.value as CompositionOutput["format"])}>{(Object.keys(formatLabels) as Array<CompositionOutput["format"]>).map((format) => <option key={format} value={format}>{t(formatLabels[format])}</option>)}</select></label>
+          {(exportFormat === "mp4" || exportFormat === "mov") && <label>{t("编码")}<div className="segmented"><button className={exportCodec === "h264" ? "active" : ""} onClick={() => setExportCodec("h264")}>{t("H.264 兼容")}</button><button className={exportCodec === "hevc" ? "active" : ""} onClick={() => setExportCodec("hevc")}>{t("HEVC 小体积")}</button></div></label>}
+          {(exportFormat === "mp4" || exportFormat === "mov") && <label>{t("分辨率")}<select value={exportResolution} onChange={(event) => setExportResolution(Number(event.target.value) as 720 | 1080 | 2160)}><option value="1080">1080P</option><option value="2160">4K</option><option value="720">720P</option></select></label>}
+          {(exportFormat === "mp4" || exportFormat === "mov") && <label>{t("帧率")}<div className="segmented"><button className={exportFps === 30 ? "active" : ""} onClick={() => setExportFps(30)}>30 FPS</button><button className={exportFps === 60 ? "active" : ""} onClick={() => setExportFps(60)}>60 FPS</button></div></label>}
+          {exportFormat !== "gif" && <label>{t("响度标准化")}<select value={loudnessTarget === null ? "off" : String(loudnessTarget)} onChange={(event) => setLoudnessTarget(event.target.value === "off" ? null : Number(event.target.value))}><option value="-14">{t("-14 LUFS · YouTube / B 站")}</option><option value="-16">{t("-16 LUFS · 播客 / 移动端")}</option><option value="-23">{t("-23 LUFS · 广播 EBU R128")}</option><option value="off">{t("关闭")}</option></select></label>}
         </div>
-        <div className="export-summary"><span>时长</span><strong>{formatClock(exportFormat === "gif" ? Math.min(15, duration) : duration)}</strong><i></i><span>画布</span><strong>{ratio} · {project.tracks.filter((track) => track.kind === "video").length} 视频轨</strong></div>
-        <button className="ghost-action health-button" onClick={() => setHealthOpen(true)}>先做发布前检查</button>
-        <button className="primary full large" onClick={() => void startExport()}>开始导出 {formatLabels[exportFormat]}{exportFormat === "mp4" || exportFormat === "mov" ? ` · ${exportFps} FPS` : ""}</button>
+        <div className="export-summary"><span>{t("时长")}</span><strong>{formatClock(exportFormat === "gif" ? Math.min(15, duration) : duration)}</strong><i></i><span>{t("画布")}</span><strong>{ratio} · {t("{count} 视频轨", { count: project.tracks.filter((track) => track.kind === "video").length })}</strong></div>
+        <button className="ghost-action health-button" onClick={() => setHealthOpen(true)}>{t("先做发布前检查")}</button>
+        <button className="primary full large" onClick={() => void startExport()}>{t("开始导出 {format}", { format: t(formatLabels[exportFormat]) })}{exportFormat === "mp4" || exportFormat === "mov" ? ` · ${exportFps} FPS` : ""}</button>
       </div>}
     </section></div>}
 
     {hardwareOpen && <div className="modal-backdrop" onMouseDown={() => setHardwareOpen(false)}><section className="hardware-modal" onMouseDown={(event) => event.stopPropagation()}>
-      <header><div><span className="eyebrow">LOCAL AI CHECK</span><h2>本地字幕硬件检测</h2></div><button onClick={() => setHardwareOpen(false)}>×</button></header>
-      {!window.dashCutDesktop ? <div className="hardware-empty"><b>请在 DashCut 极剪桌面版中运行检测</b><p>浏览器无法读取完整的 CPU、GPU、内存和磁盘信息。本地 faster-whisper 只在 Windows / macOS 桌面应用中提供。</p></div> : checkingHardware ? <div className="hardware-empty"><b>正在检查设备…</b><p>检测 CPU、CUDA GPU、系统内存、磁盘和内置 AI 运行时。</p></div> : hardware && <div className="hardware-content">
-        <div className={`hardware-verdict ${hardware.assessment.tier}`}><span>{hardware.assessment.tier === "recommended" ? "✓" : hardware.assessment.tier === "minimum" ? "!" : "×"}</span><div><b>{hardware.assessment.tier === "recommended" ? "达到推荐配置" : hardware.assessment.tier === "minimum" ? "达到最低配置" : "暂不适合本地识别"}</b><small>{hardware.assessment.tier === "unsupported" ? "建议使用云端模型" : `建议 ${hardware.assessment.model} · ${hardware.assessment.computeType}`}</small></div></div>
-        <div className="hardware-grid"><div><span>CPU</span><b>{hardware.cpu.model}</b><small>{hardware.cpu.logicalCores} 个逻辑核心</small></div><div><span>系统内存</span><b>{hardware.memory.totalGb} GB</b><small>当前可用 {hardware.memory.freeGb} GB</small></div><div><span>图形处理器</span><b>{hardware.gpus[0]?.name || "未检测到独立 GPU"}</b><small>{hardware.gpus[0]?.fasterWhisperAcceleration ? `${hardware.gpus[0].memoryGb ?? "未知"} GB VRAM · CUDA` : "faster-whisper 将使用 CPU"}</small></div><div><span>可用磁盘</span><b>{hardware.diskFreeGb} GB</b><small>建议预留至少 10 GB</small></div></div>
-        <div className="runtime-status"><strong>内置运行时</strong><span className={hardware.runtime?.ready ? "ready" : ""}>{hardware.runtime?.ready ? `${hardware.runtime.kind === "bundled" ? "随安装包提供" : "开发环境"} · faster-whisper ${hardware.runtime.info?.fasterWhisper ?? ""}` : "不可用，请重新安装 DashCut 极剪"}</span></div>
-        {!!hardware.assessment.blockers.length && <div className="hardware-messages blockers"><b>需要解决</b>{hardware.assessment.blockers.map((item) => <span key={item}>• {item}</span>)}</div>}
-        {!!hardware.assessment.notes.length && <div className="hardware-messages"><b>检测说明</b>{hardware.assessment.notes.map((item) => <span key={item}>• {item}</span>)}</div>}
-        <div className="requirements-table"><div><b>最低配置</b><span>4 核 CPU</span><span>8 GB RAM</span><span>4 GB 空间</span><small>small · CPU INT8</small></div><div><b>推荐配置</b><span>8 核 CPU</span><span>16 GB RAM</span><span>8 GB 显存 CUDA GPU</span><small>large-v3 · CUDA FP16</small></div></div>
-        <section className="model-manager"><header><div><b>选择推理模型</b><small>默认不下载，仅在你点击后安装</small></div><span>推荐：{hardware.assessment.model}</span></header><div className="model-list">{localModels.map((model) => <button key={model.id} className={`${selectedModel === model.id ? "selected" : ""} ${model.id === hardware.assessment.model ? "recommended" : ""}`} onClick={() => setSelectedModel(model.id)}><span className="model-radio">{selectedModel === model.id ? "●" : "○"}</span><div><b>{model.label} {model.id === hardware.assessment.model && <i>推荐</i>}</b><small>{model.description} · 约 {model.approximateGb} GB</small></div>{model.installed ? <span className="model-installed">已安装</span> : <span className="model-not-installed">未下载</span>}</button>)}</div>
-          {localModels.find((model) => model.id === selectedModel)?.installed ? <div className="model-action-row"><span>模型已就绪，可离线使用</span><button onClick={() => void removeLocalModel(selectedModel)}>删除模型</button></div> : <button className="primary full" disabled={Boolean(installingModel) || hardware.assessment.tier === "unsupported" || !hardware.runtime?.ready} onClick={() => void installLocalModel(selectedModel)}>{installingModel === selectedModel ? `正在下载安装 ${selectedModel}…` : `下载安装 ${selectedModel} · 约 ${localModels.find((model) => model.id === selectedModel)?.approximateGb ?? "-"} GB`}</button>}
+      <header><div><span className="eyebrow">LOCAL AI CHECK</span><h2>{t("本地字幕硬件检测")}</h2></div><button onClick={() => setHardwareOpen(false)}>×</button></header>
+      {!window.dashCutDesktop ? <div className="hardware-empty"><b>{t("请在 DashCut 极剪桌面版中运行检测")}</b><p>{t("浏览器无法读取完整的 CPU、GPU、内存和磁盘信息。本地 faster-whisper 只在 Windows / macOS 桌面应用中提供。")}</p></div> : checkingHardware ? <div className="hardware-empty"><b>{t("正在检查设备…")}</b><p>{t("检测 CPU、CUDA GPU、系统内存、磁盘和内置 AI 运行时。")}</p></div> : hardware && <div className="hardware-content">
+        <div className={`hardware-verdict ${hardware.assessment.tier}`}><span>{hardware.assessment.tier === "recommended" ? "✓" : hardware.assessment.tier === "minimum" ? "!" : "×"}</span><div><b>{hardware.assessment.tier === "recommended" ? t("达到推荐配置") : hardware.assessment.tier === "minimum" ? t("达到最低配置") : t("暂不适合本地识别")}</b><small>{hardware.assessment.tier === "unsupported" ? t("建议使用云端模型") : t("建议 {model} · {computeType}", { model: hardware.assessment.model, computeType: hardware.assessment.computeType })}</small></div></div>
+        <div className="hardware-grid"><div><span>CPU</span><b>{hardware.cpu.model}</b><small>{t("{count} 个逻辑核心", { count: hardware.cpu.logicalCores })}</small></div><div><span>{t("系统内存")}</span><b>{hardware.memory.totalGb} GB</b><small>{t("当前可用 {size} GB", { size: hardware.memory.freeGb })}</small></div><div><span>{t("图形处理器")}</span><b>{hardware.gpus[0]?.name || t("未检测到独立 GPU")}</b><small>{hardware.gpus[0]?.fasterWhisperAcceleration ? t("{size} GB VRAM · CUDA", { size: hardware.gpus[0].memoryGb ?? t("未知") }) : t("faster-whisper 将使用 CPU")}</small></div><div><span>{t("可用磁盘")}</span><b>{hardware.diskFreeGb} GB</b><small>{t("建议预留至少 10 GB")}</small></div></div>
+        <div className="runtime-status"><strong>{t("内置运行时")}</strong><span className={hardware.runtime?.ready ? "ready" : ""}>{hardware.runtime?.ready ? t("{source} · faster-whisper {version}", { source: hardware.runtime.kind === "bundled" ? t("随安装包提供") : t("开发环境"), version: hardware.runtime.info?.fasterWhisper ?? "" }) : t("不可用，请重新安装 DashCut 极剪")}</span></div>
+        {!!hardware.assessment.blockers.length && <div className="hardware-messages blockers"><b>{t("需要解决")}</b>{hardware.assessment.blockers.map((item) => <span key={item}>• {item}</span>)}</div>}
+        {!!hardware.assessment.notes.length && <div className="hardware-messages"><b>{t("检测说明")}</b>{hardware.assessment.notes.map((item) => <span key={item}>• {item}</span>)}</div>}
+        <div className="requirements-table"><div><b>{t("最低配置")}</b><span>{t("4 核 CPU")}</span><span>8 GB RAM</span><span>{t("4 GB 空间")}</span><small>small · CPU INT8</small></div><div><b>{t("推荐配置")}</b><span>{t("8 核 CPU")}</span><span>16 GB RAM</span><span>{t("8 GB 显存 CUDA GPU")}</span><small>large-v3 · CUDA FP16</small></div></div>
+        <section className="model-manager"><header><div><b>{t("选择推理模型")}</b><small>{t("默认不下载，仅在你点击后安装")}</small></div><span>{t("推荐：{model}", { model: hardware.assessment.model })}</span></header><div className="model-list">{localModels.map((model) => <button key={model.id} className={`${selectedModel === model.id ? "selected" : ""} ${model.id === hardware.assessment.model ? "recommended" : ""}`} onClick={() => setSelectedModel(model.id)}><span className="model-radio">{selectedModel === model.id ? "●" : "○"}</span><div><b>{model.label} {model.id === hardware.assessment.model && <i>{t("推荐")}</i>}</b><small>{t("{description} · 约 {size} GB", { description: model.description, size: model.approximateGb })}</small></div>{model.installed ? <span className="model-installed">{t("已安装")}</span> : <span className="model-not-installed">{t("未下载")}</span>}</button>)}</div>
+          {localModels.find((model) => model.id === selectedModel)?.installed ? <div className="model-action-row"><span>{t("模型已就绪，可离线使用")}</span><button onClick={() => void removeLocalModel(selectedModel)}>{t("删除模型")}</button></div> : <button className="primary full" disabled={Boolean(installingModel) || hardware.assessment.tier === "unsupported" || !hardware.runtime?.ready} onClick={() => void installLocalModel(selectedModel)}>{installingModel === selectedModel ? t("正在下载安装 {model}…", { model: selectedModel }) : t("下载安装 {model} · 约 {size} GB", { model: selectedModel, size: localModels.find((model) => model.id === selectedModel)?.approximateGb ?? "-" })}</button>}
         </section>
-        <div className="hardware-actions"><button className="ghost-action" onClick={() => void checkHardware()}>重新检测</button><button className="primary" disabled={hardware.assessment.tier === "unsupported" || !localModels.find((model) => model.id === selectedModel)?.installed} onClick={() => { setRecognitionEngine("local"); setHardwareOpen(false); setToast(`已选择本地 ${selectedModel} 模型`); }}>使用本地模型</button></div>
+        <div className="hardware-actions"><button className="ghost-action" onClick={() => void checkHardware()}>{t("重新检测")}</button><button className="primary" disabled={hardware.assessment.tier === "unsupported" || !localModels.find((model) => model.id === selectedModel)?.installed} onClick={() => { setRecognitionEngine("local"); setHardwareOpen(false); setToast(t("已选择本地 {model} 模型", { model: selectedModel })); }}>{t("使用本地模型")}</button></div>
       </div>}
     </section></div>}
 
     {aboutOpen && <div className="modal-backdrop" onMouseDown={() => setAboutOpen(false)}><section className="about-modal" onMouseDown={(event) => event.stopPropagation()}>
       <header><div><span className="eyebrow">ABOUT & LICENSES</span><h2>DashCut 极剪</h2></div><button onClick={() => setAboutOpen(false)}>×</button></header>
-      <div className="about-content"><p>面向哔哩哔哩与 YouTube 创作者的视频编辑器。</p><div><strong>视频运行时</strong><span>FFmpeg 9.0.1 · LGPLv2.1-or-later</span><small>macOS 使用 VideoToolbox，Windows 使用 MediaFoundation。安装包包含许可证、源码地址和实际构建参数。</small></div><div><strong>应用许可证</strong><span>DashCut · MIT License</span></div><a href="https://github.com/Mikasathebest/DashCut/blob/main/THIRD_PARTY_NOTICES.md" target="_blank" rel="noreferrer">查看第三方声明与对应源码 ↗</a></div>
+      <div className="about-content"><p>{t("面向哔哩哔哩与 YouTube 创作者的视频编辑器。")}</p><div><strong>{t("视频运行时")}</strong><span>FFmpeg 9.0.1 · LGPLv2.1-or-later</span><small>{t("macOS 使用 VideoToolbox，Windows 使用 MediaFoundation。安装包包含许可证、源码地址和实际构建参数。")}</small></div><div><strong>{t("应用许可证")}</strong><span>DashCut · MIT License</span></div><a href="https://github.com/Mikasathebest/DashCut/blob/main/THIRD_PARTY_NOTICES.md" target="_blank" rel="noreferrer">{t("查看第三方声明与对应源码")} ↗</a></div>
     </section></div>}
 
     {recoveries.length > 0 && <div className="modal-backdrop"><section className="about-modal recovery-modal">
-      <header><div><span className="eyebrow">RECOVERY</span><h2>发现未保存的项目</h2></div></header>
-      <div className="about-content"><p>DashCut 上次没有正常关闭，以下项目有自动保存的修改：</p>
-        {recoveries.map((item) => <div key={item.id} className="recovery-row"><div><strong>{item.title}</strong><small>{new Date(item.savedAt).toLocaleString("zh-CN")}{item.projectPath ? ` · ${item.projectPath}` : " · 尚未保存到磁盘"}</small></div><button className="primary" onClick={() => void restoreRecovery(item)}>恢复</button></div>)}
-        <button className="ghost-action" onClick={() => void discardRecoveries()}>全部丢弃</button>
+      <header><div><span className="eyebrow">RECOVERY</span><h2>{t("发现未保存的项目")}</h2></div></header>
+      <div className="about-content"><p>{t("DashCut 上次没有正常关闭，以下项目有自动保存的修改：")}</p>
+        {recoveries.map((item) => <div key={item.id} className="recovery-row"><div><strong>{item.title}</strong><small>{new Date(item.savedAt).toLocaleString("zh-CN")}{item.projectPath ? ` · ${item.projectPath}` : ` · ${t("尚未保存到磁盘")}`}</small></div><button className="primary" onClick={() => void restoreRecovery(item)}>{t("恢复")}</button></div>)}
+        <button className="ghost-action" onClick={() => void discardRecoveries()}>{t("全部丢弃")}</button>
       </div>
     </section></div>}
 
     {missingAssets.length > 0 && <div className="modal-backdrop"><section className="about-modal recovery-modal">
-      <header><div><span className="eyebrow">RELINK MEDIA</span><h2>找不到 {missingAssets.length} 个素材</h2></div><button onClick={() => setMissingAssets([])}>×</button></header>
-      <div className="about-content"><p>素材可能被移动或重命名。定位其中一个文件后，同一文件夹里同名的其他素材会自动重新链接。</p>
-        {missingAssets.map((id) => assetMap.get(id)).filter(Boolean).map((asset) => <div key={asset!.id} className="recovery-row"><div><strong>{asset!.name}</strong><small>{asset!.sourcePath || "无路径"}</small></div><button className="primary" onClick={() => void relinkAsset(asset!.id)}>定位…</button></div>)}
-        <button className="ghost-action" onClick={() => setMissingAssets([])}>稍后处理</button>
+      <header><div><span className="eyebrow">RELINK MEDIA</span><h2>{t("找不到 {count} 个素材", { count: missingAssets.length })}</h2></div><button onClick={() => setMissingAssets([])}>×</button></header>
+      <div className="about-content"><p>{t("素材可能被移动或重命名。定位其中一个文件后，同一文件夹里同名的其他素材会自动重新链接。")}</p>
+        {missingAssets.map((id) => assetMap.get(id)).filter(Boolean).map((asset) => <div key={asset!.id} className="recovery-row"><div><strong>{asset!.name}</strong><small>{asset!.sourcePath || t("无路径")}</small></div><button className="primary" onClick={() => void relinkAsset(asset!.id)}>{t("定位…")}</button></div>)}
+        <button className="ghost-action" onClick={() => setMissingAssets([])}>{t("稍后处理")}</button>
       </div>
     </section></div>}
 
     {healthOpen && <HealthCheck running={health.running} stage={progressStage} issues={health.issues} onRun={() => void runHealthCheck()} onFix={fixHealthIssue} onSeek={(time) => { seek(time); setHealthOpen(false); setExportOpen(false); }} onClose={() => setHealthOpen(false)} />}
 
     {reframeOpen && <div className="modal-backdrop" onMouseDown={() => setReframeOpen(false)}><section className="about-modal reframe-modal" onMouseDown={(event) => event.stopPropagation()}>
-      <header><div><span className="eyebrow">SMART REFRAME</span><h2>智能转竖屏</h2></div><button onClick={() => setReframeOpen(false)}>×</button></header>
+      <header><div><span className="eyebrow">SMART REFRAME</span><h2>{t("智能转竖屏")}</h2></div><button onClick={() => setReframeOpen(false)}>×</button></header>
       <div className="about-content">
-        <p>在本机逐帧检测人脸，生成跟随主体的竖屏取景（铺满画面 + 水平位置关键帧）。首次使用会下载约 0.2 MB 的开源人脸检测模型（MediaPipe BlazeFace，Apache-2.0），视频不会上传。</p>
-        <div className="segmented"><button className={reframeOptions.scope === "main" ? "active" : ""} onClick={() => setReframeOptions({ ...reframeOptions, scope: "main" })}>主轨全部视频</button><button className={reframeOptions.scope === "selected" ? "active" : ""} onClick={() => setReframeOptions({ ...reframeOptions, scope: "selected" })}>所选片段（{selectedClips.length}）</button></div>
-        <label className="inspector-slider"><span>跟随速度</span><input type="range" min="0" max="1" step="0.05" value={reframeOptions.tracking} onChange={(event) => setReframeOptions({ ...reframeOptions, tracking: Number(event.target.value) })} /><b>{reframeOptions.tracking < 0.34 ? "平稳" : reframeOptions.tracking < 0.67 ? "适中" : "灵敏"}</b><i /></label>
-        <label className="inspector-toggle"><input type="checkbox" checked={reframeOptions.switchCanvas} onChange={(event) => setReframeOptions({ ...reframeOptions, switchCanvas: event.target.checked })} />同时把画布改为 9:16 竖屏</label>
-        <button className="primary" onClick={() => void runReframe()}>开始转换</button>
+        <p>{t("在本机逐帧检测人脸，生成跟随主体的竖屏取景（铺满画面 + 水平位置关键帧）。首次使用会下载约 0.2 MB 的开源人脸检测模型（MediaPipe BlazeFace，Apache-2.0），视频不会上传。")}</p>
+        <div className="segmented"><button className={reframeOptions.scope === "main" ? "active" : ""} onClick={() => setReframeOptions({ ...reframeOptions, scope: "main" })}>{t("主轨全部视频")}</button><button className={reframeOptions.scope === "selected" ? "active" : ""} onClick={() => setReframeOptions({ ...reframeOptions, scope: "selected" })}>{t("所选片段（{count}）", { count: selectedClips.length })}</button></div>
+        <label className="inspector-slider"><span>{t("跟随速度")}</span><input type="range" min="0" max="1" step="0.05" value={reframeOptions.tracking} onChange={(event) => setReframeOptions({ ...reframeOptions, tracking: Number(event.target.value) })} /><b>{reframeOptions.tracking < 0.34 ? t("平稳") : reframeOptions.tracking < 0.67 ? t("适中") : t("灵敏")}</b><i /></label>
+        <label className="inspector-toggle"><input type="checkbox" checked={reframeOptions.switchCanvas} onChange={(event) => setReframeOptions({ ...reframeOptions, switchCanvas: event.target.checked })} />{t("同时把画布改为 9:16 竖屏")}</label>
+        <button className="primary" onClick={() => void runReframe()}>{t("开始转换")}</button>
       </div>
     </section></div>}
 
@@ -1747,7 +1750,7 @@ function CropModal({ clip, asset, onClose, onApply }: { clip: Clip; asset: Asset
   const [drag, setDrag] = useState<{ handle: string; x: number; y: number; origin: Clip["crop"] } | null>(null);
   const boxRef = useRef<HTMLDivElement>(null);
   const aspect = asset.width / Math.max(1, asset.height);
-  const presets: Array<[string, number | null]> = [["自由", null], ["原始", aspect], ["16:9", 16 / 9], ["9:16", 9 / 16], ["1:1", 1], ["4:3", 4 / 3]];
+  const presets: Array<[string, number | null]> = [[t("自由"), null], [t("原始"), aspect], ["16:9", 16 / 9], ["9:16", 9 / 16], ["1:1", 1], ["4:3", 4 / 3]];
   function applyPreset(target: number | null) {
     if (!target) return setCrop({ x: 0, y: 0, w: 1, h: 1 });
     // Largest centred rect with the target pixel aspect.
@@ -1780,12 +1783,12 @@ function CropModal({ clip, asset, onClose, onApply }: { clip: Clip; asset: Asset
   }, [drag]);
   const begin = (handle: string) => (event: React.PointerEvent) => { event.stopPropagation(); setDrag({ handle, x: event.clientX, y: event.clientY, origin: crop }); };
   return <div className="modal-backdrop" onMouseDown={onClose}><section className="crop-modal" onMouseDown={(event) => event.stopPropagation()}>
-    <header><div><span className="eyebrow">CROP</span><h2>裁剪画面</h2></div><button onClick={onClose}>×</button></header>
+    <header><div><span className="eyebrow">CROP</span><h2>{t("裁剪画面")}</h2></div><button onClick={onClose}>×</button></header>
     <div className="crop-stage"><div ref={boxRef} className="crop-box" style={{ aspectRatio: `${asset.width} / ${asset.height}`, backgroundImage: `url("${asset.thumbnail}")` }}>
       <div className="crop-rect" style={{ left: `${crop.x * 100}%`, top: `${crop.y * 100}%`, width: `${crop.w * 100}%`, height: `${crop.h * 100}%` }} onPointerDown={begin("move")}>
         {["tl", "tr", "bl", "br", "t", "b", "l", "r"].map((handle) => <i key={handle} className={`crop-handle ${handle}`} onPointerDown={begin(handle)} />)}
       </div>
     </div></div>
-    <footer><div className="crop-presets">{presets.map(([label, value]) => <button key={label} onClick={() => applyPreset(value)}>{label}</button>)}</div><div><button className="ghost-action" onClick={() => setCrop({ x: 0, y: 0, w: 1, h: 1 })}>重置</button><button className="primary" onClick={() => onApply(crop)}>应用裁剪</button></div></footer>
+    <footer><div className="crop-presets">{presets.map(([label, value]) => <button key={label} onClick={() => applyPreset(value)}>{label}</button>)}</div><div><button className="ghost-action" onClick={() => setCrop({ x: 0, y: 0, w: 1, h: 1 })}>{t("重置")}</button><button className="primary" onClick={() => onApply(crop)}>{t("应用裁剪")}</button></div></footer>
   </section></div>;
 }
