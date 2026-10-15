@@ -76,7 +76,8 @@ Windows x64 releases produce an unsigned one-click `.exe` without credentials; W
 - **Titles:** the **Text** tab adds styled titles (headline, subtitle, outline, banner, tag, serif) at the playhead on an overlay track. Edit text, font, size, colours, outline, background and shadow in the right panel. Preview and export render titles with the same code.
 - **Transitions:** select a main-track clip, open **Animation** and choose crossfade, dip to black, wipe or slide to the next clip. Transitions use spare footage on both sides of the cut and fall back to a dip when there isn't enough.
 - **Speed curves:** in **Speed**, pick ramp up, ramp down, montage, hero, bullet time or flash, then drag the points. Audio keeps its pitch.
-- **Keyboard:** J/K/L shuttle (press again for 2× and 4×), ←/→ step one frame (⇧ for 10), ⌘C/⌘X/⌘V copy, cut and paste clips at the playhead, ⌘D duplicates. Drag on empty timeline space to marquee-select.
+- **Scrubbing:** click anywhere on the ruler or an empty part of the tracks to jump there, and drag (or drag the red playhead) to preview any moment. Hold ⇧ or ⌘ while dragging on empty space to marquee-select clips.
+- **Keyboard:** J/K/L shuttle (press again for 2× and 4×), ←/→ step one frame (⇧ for 10), ⌘C/⌘X/⌘V copy, cut and paste clips at the playhead, ⌘D duplicates. ⇧- or ⌘-drag on empty timeline space to marquee-select.
 
 ### Edit by transcript and clean up talking-head takes
 

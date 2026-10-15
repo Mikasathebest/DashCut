@@ -153,10 +153,13 @@ button { cursor: pointer; }
 .icon { flex: none; display: block; }
 .topbar { grid-template-columns: 260px 1fr auto; }
 .side-panel { display: flex; flex-direction: column; padding: 0; overflow: hidden; }
-.panel-tabs { display: flex; gap: 2px; padding: 8px 10px 0; border-bottom: 1px solid var(--line); }
-.panel-tabs button { display: flex; align-items: center; gap: 6px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: #8b93a2; padding: 8px 10px 9px; font-size: 11px; }
+/* Icon above, label below. */
+.panel-tabs { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 2px; padding: 6px 8px 0; border-bottom: 1px solid var(--line); }
+.panel-tabs button { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; min-width: 0; border: 0; border-bottom: 2px solid transparent; border-radius: 6px 6px 0 0; background: transparent; color: #8b93a2; padding: 7px 4px 7px; font-size: 10px; line-height: 1.1; }
+.panel-tabs button span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.panel-tabs button:hover { color: #d6dbe4; background: #161a22; }
 .panel-tabs button.active { color: white; border-bottom-color: var(--blue); }
-.panel-tabs b { font-size: 12px; }
+.panel-tabs button.active .icon { color: var(--blue); }
 .panel-scroll { flex: 1; min-height: 0; overflow: auto; padding: 14px 14px 18px; scrollbar-width: thin; scrollbar-color: #343a48 transparent; }
 .upload-card { padding: 14px; }
 .media-filters { display: flex; gap: 4px; margin: 12px 0 10px; }
@@ -316,8 +319,12 @@ button { cursor: pointer; }
 .timeline-clip.selected .clip-edge { background: rgba(255,255,255,.85); }
 .timeline-clip.selected .clip-edge.left { border-radius: 4px 0 0 4px; }
 .timeline-clip.selected .clip-edge.right { border-radius: 0 4px 4px 0; }
-.timeline-playhead { position: absolute; z-index: 6; top: 0; bottom: 0; width: 1px; background: #ff6969; pointer-events: none; }
-.timeline-playhead i { position: absolute; top: 0; left: -5px; border-left: 5px solid transparent; border-right: 5px solid transparent; border-top: 8px solid #ff6969; }
+.timeline-playhead { position: absolute; z-index: 6; top: 0; bottom: 0; width: 1px; background: #ff6969; cursor: ew-resize; touch-action: none; }
+/* A wider invisible grab area around the 1px line. */
+.timeline-playhead::before { content: ""; position: absolute; top: 0; bottom: 0; left: -4px; width: 9px; }
+.timeline-playhead i { position: absolute; top: 0; left: -6px; border-left: 6px solid transparent; border-right: 6px solid transparent; border-top: 10px solid #ff6969; }
+.timeline-playhead:hover, .timeline-playhead.dragging { box-shadow: 0 0 0 1px rgba(255,105,105,.35); }
+.track-lane, .timeline-ruler { touch-action: none; }
 .timeline-hoverline { position: absolute; z-index: 5; top: 0; bottom: 0; width: 1px; background: rgba(255, 214, 102, .8); pointer-events: none; }
 .timeline-hoverline span { position: absolute; top: 4px; left: 4px; padding: 1px 4px; border-radius: 3px; background: #f5c451; color: #1c1c1c; font: 8px monospace; white-space: nowrap; }
 

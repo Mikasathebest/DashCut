@@ -245,6 +245,13 @@ export function Timeline(props: TimelineProps) {
   }
 
   // Window listeners are attached synchronously so a release that arrives before the next render is not lost.
+  /** Seeks to the pointer and keeps following it until release, so any time can be previewed by dragging. */
+  function scrubFrom(event: React.PointerEvent) {
+    event.preventDefault();
+    props.onSeek(timeFromClientX(event.clientX));
+    beginDrag({ type: "scrub" });
+  }
+
   function beginDrag(initial: DragState) {
     dragRef.current = initial;
     setDrag(initial);
@@ -412,7 +419,7 @@ export function Timeline(props: TimelineProps) {
         <span className="track-actions"><button title={track.muted ? t("取消静音") : t("静音原声")} className={track.muted ? "on" : ""} onClick={() => props.onTrack(track.id, { muted: !track.muted })}><Icon name={track.muted ? "mute" : "volume"} size={12} /></button></span>
       </div>
       <i className="track-lead" />
-      <div className="track-lane" style={{ width: contentWidth }} onPointerDown={(event) => { if (event.button !== 0) return; props.onSelect([]); props.onSeek(timeFromClientX(event.clientX)); }}>
+      <div className="track-lane" style={{ width: contentWidth }} onPointerDown={(event) => { if (event.button !== 0) return; props.onSelect([]); scrubFrom(event); }}>
         {clips.map((clip) => {
           const asset = assets.get(clip.assetId)!;
           const preview = drag && "clipId" in drag && drag.clipId === clip.id && drag.type !== "volume" ? drag : null;
@@ -494,7 +501,7 @@ export function Timeline(props: TimelineProps) {
     return <div key={lang} className={`timeline-row caption-track ${lang}${dimmed ? " dimmed" : ""}`} style={{ height: 30 }} title={dimmed ? t("当前预览与导出未显示此语言") : undefined}>
       <div className="track-header"><span className="track-name"><Icon name="text" size={12} />{lang === "zh" ? t("中文字幕") : "English"}</span></div>
       <i className="track-lead" />
-      <div className="track-lane" style={{ width: contentWidth }} onPointerDown={(event) => { if (event.button !== 0) return; props.onSelectSubtitle(null); props.onSeek(timeFromClientX(event.clientX)); }}
+      <div className="track-lane" style={{ width: contentWidth }} onPointerDown={(event) => { if (event.button !== 0) return; props.onSelectSubtitle(null); scrubFrom(event); }}
         onDoubleClick={(event) => { if (event.target !== event.currentTarget) return; setEditingCaption(props.onAddSubtitle(timeFromClientX(event.clientX))); }}>
         {subtitles.map((subtitle) => {
           const dragged = drag?.type === "caption" && drag.id === subtitle.id ? drag : null;
@@ -539,7 +546,7 @@ export function Timeline(props: TimelineProps) {
 
   return <div className="timeline-scroll" ref={scrollRef} onPointerLeave={() => props.onHover(null)} onPointerMove={(event) => { if (toggles.previewAxis && !drag) props.onHover(timeFromClientX(event.clientX)); }}>
     <div className="timeline-content" style={{ width: contentWidth + origin }}>
-      <div className="timeline-ruler" onPointerDown={(event) => { if (event.button !== 0) return; props.onSeek(timeFromClientX(event.clientX)); beginDrag({ type: "scrub" }); }}>
+      <div className="timeline-ruler" onPointerDown={(event) => { if (event.button !== 0) return; scrubFrom(event); }}>
         <div className="track-header ruler-corner"><span>{formatClock(time, true, props.fps)}</span></div>
         <i className="track-lead" />
         <div className="ruler-lane" style={{ width: contentWidth }}>
@@ -562,7 +569,11 @@ export function Timeline(props: TimelineProps) {
             </span>
           </div>
           <i className="track-lead" onDragOver={(event) => { if (track.main) onLaneDragOver(event, track.id, 0); }} onDrop={(event) => { if (track.main) onLaneDrop(event, track.id, 0); }}>{track.main && <button className="cover-button" onClick={props.onCover} title={t("编辑封面")} style={coverImage ? { backgroundImage: `url("${coverImage}")` } : undefined}><span>{t("封面")}</span></button>}</i>
-          <div className="track-lane" style={{ width: contentWidth }} onPointerDown={(event) => { if (event.button !== 0) return; beginDrag({ type: "marquee", x0: event.clientX, y0: event.clientY, x1: event.clientX, y1: event.clientY, additive: event.shiftKey || event.metaKey }); }} onDragOver={(event) => onLaneDragOver(event, track.id)} onDragLeave={() => setAssetDrop(null)} onDrop={(event) => onLaneDrop(event, track.id)}>
+          <div className="track-lane" style={{ width: contentWidth }} onPointerDown={(event) => {
+            if (event.button !== 0) return;
+            // Plain drag scrubs the playhead; ⇧/⌘ drag selects clips with a marquee.
+            if (!event.shiftKey && !event.metaKey && !event.ctrlKey) { props.onSelect([]); return scrubFrom(event); }
+            beginDrag({ type: "marquee", x0: event.clientX, y0: event.clientY, x1: event.clientX, y1: event.clientY, additive: event.shiftKey || event.metaKey }); }} onDragOver={(event) => onLaneDragOver(event, track.id)} onDragLeave={() => setAssetDrop(null)} onDrop={(event) => onLaneDrop(event, track.id)}>
             {track.main && trackClips(project, track.id).flatMap((clip, index, list) => clip.transitionOut && list[index + 1] && Math.abs(clipEnd(clip) - list[index + 1].start) < 0.01
               ? [<button key={`transition-${clip.id}`} className="clip-transition" style={{ left: clipEnd(clip) * zoom }} title={t("转场：{duration}s，点击编辑", { duration: clip.transitionOut.duration.toFixed(1) })} onPointerDown={(event) => event.stopPropagation()} onClick={() => props.onTransition(clip.id)}>⧉</button>] : [])}
             {project.clips.filter((clip) => clip.trackId === track.id && !(drag?.type === "move" && drag.moved && drag.clipId === clip.id && drag.target !== track.id)).map((clip) => renderClip(clip, track, height))}
@@ -578,7 +589,7 @@ export function Timeline(props: TimelineProps) {
       {captionRow("zh")}
       {captionRow("en")}
       {newZone("new-bottom")}
-      <div className="timeline-playhead" style={{ left: origin + time * zoom }}><i /></div>
+      <div className={`timeline-playhead${drag?.type === "scrub" ? " dragging" : ""}`} style={{ left: origin + time * zoom }} title={t("拖动播放头预览任意时间")} onPointerDown={(event) => { if (event.button !== 0) return; event.stopPropagation(); scrubFrom(event); }}><i /></div>
       {toggles.previewAxis && hoverTime !== null && !drag && <div className="timeline-hoverline" style={{ left: origin + hoverTime * zoom }}><span>{formatClock(hoverTime, true, props.fps)}</span></div>}
       {drag?.type === "marquee" && (Math.abs(drag.x1 - drag.x0) > 4 || Math.abs(drag.y1 - drag.y0) > 4) && <div className="timeline-marquee" style={{ left: Math.min(drag.x0, drag.x1), top: Math.min(drag.y0, drag.y1), width: Math.abs(drag.x1 - drag.x0), height: Math.abs(drag.y1 - drag.y0) }} />}
     </div>

@@ -1807,7 +1807,7 @@ export default function Home() {
 
     <section className="workspace">
       <aside className="side-panel" onPointerDownCapture={() => { focusZone.current = "library"; }}>
-        <nav className="panel-tabs"><button className={leftTab === "media" ? "active" : ""} onClick={() => setLeftTab("media")}><Icon name="film" size={14} />{t("素材")}</button><button className={leftTab === "text" ? "active" : ""} onClick={() => setLeftTab("text")}><Icon name="text" size={14} />{t("文本")}</button><button className={leftTab === "transcript" ? "active" : ""} onClick={() => setLeftTab("transcript")}><Icon name="talk" size={14} />{t("文稿")}</button><button className={leftTab === "subtitles" ? "active" : ""} onClick={() => setLeftTab("subtitles")}><b>{t("字")}</b>{t("自动字幕")}</button></nav>
+        <nav className="panel-tabs">{([["media", "film", "素材"], ["text", "text", "文本"], ["transcript", "transcript", "文稿"], ["subtitles", "captions", "自动字幕"]] as const).map(([key, icon, label]) => <button key={key} className={leftTab === key ? "active" : ""} onClick={() => setLeftTab(key)}><Icon name={icon} size={18} /><span>{t(label)}</span></button>)}</nav>
         <div className="panel-scroll">{leftTab === "media" ? mediaPanel : leftTab === "text" ? <>
           <p className="empty-hint">{t("点击添加到播放头位置；选中后在右侧「文本」中修改文字和样式。")}</p>
           <div className="text-presets-grid">{textPresets.map((preset) => <button key={preset.id} onClick={() => addText(preset.style)} title={t("添加到播放头")}>

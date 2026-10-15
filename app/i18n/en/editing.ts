@@ -337,6 +337,7 @@ const en: Record<string, string> = {
   "已剪切 {count} 个素材；正在时间轴中使用的素材保留在素材库": "Cut {count} items; media used on the timeline stays in the library",
   "已复制 {count} 个素材；在素材库粘贴会复制一份，在时间轴粘贴会放到播放头处": "Copied {count} items. Paste in the library to duplicate them, or on the timeline to place them at the playhead",
   "已粘贴 {count} 个素材": "Pasted {count} items",
+  "拖动播放头预览任意时间": "Drag the playhead to preview any moment",
 };
 
 export default en;

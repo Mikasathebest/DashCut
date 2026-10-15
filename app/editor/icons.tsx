@@ -40,6 +40,8 @@ const paths: Record<string, string> = {
   image: "M4 5h16v14H4zM4 16l5-5 4 4 3-3 4 4M15 9h.01",
   film: "M4 4h16v16H4zM8 4v16M16 4v16M4 9h4M16 9h4M4 15h4M16 15h4",
   music: "M9 18V6l11-2v12M9 18a3 3 0 11-6 0 3 3 0 016 0zM20 16a3 3 0 11-6 0 3 3 0 016 0z",
+  captions: "M3 5h18v14H3zM6 11h4M12 11h6M6 15h7M15 15h3",
+  transcript: "M6 3h9l4 4v14H6zM15 3v4h4M9 11h7M9 15h7M9 19h4",
   cover: "M4 5h16v14H4zM8 15l3-3 2 2 2-2 3 3",
   fullscreen: "M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5",
   prev: "M6 5v14M18 5l-9 7 9 7z",
