@@ -18,7 +18,10 @@ function sampleState(folder) {
   return {
     id: "project-1", title: "测试项目", createdAt: "2026-10-14T00:00:00.000Z", ratio: "9:16", project, assets: [video],
     captionStyle: { fontFamily: "Arial", fontSize: 30, color: "#ffffff", outlineColor: "#000000", outlineWidth: 2, backgroundOpacity: 40 },
-    captionMode: "zh", exportSettings: { resolution: 1080, fps: 60, platform: "youtube" }, cover: { title: "封面", accent: "#56e0c7" },
+    captionMode: "zh", exportSettings: { resolution: 1080, fps: 60, platform: "youtube" }, cover: { background: "#000000", layers: [
+      { id: "bg", kind: "image", src: "data:image/png;base64,AA==", x: 0, y: 0, w: 1, h: 1, fit: "cover", aspect: 1.5, background: true, frameTime: 1.2 },
+      { id: "t1", kind: "text", text: "标题", x: 0.1, y: 0.2, size: 0.12, font: "Arial", color: "#ffffff", bold: true, italic: false, align: "center", stroke: "#000000", strokeWidth: 0.1, shadow: false, box: null },
+    ] },
   };
 }
 

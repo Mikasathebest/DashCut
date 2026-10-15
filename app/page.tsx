@@ -3,7 +3,7 @@
 import { ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "./editor/icons";
 import { Inspector, InspectorTab } from "./editor/Inspector";
-import { buildFilmstrip, buildThumbnail, captureFrame, probeFile } from "./editor/media";
+import { buildFilmstrip, buildThumbnail, probeFile } from "./editor/media";
 import { defaultTextStyle, rasterizeText, textPresets } from "./editor/text";
 import { computeReframe } from "./editor/reframe";
 import { analysisIssues, captionIssues, HealthIssue } from "./editor/health";
@@ -25,6 +25,8 @@ import { CleanCutReview } from "./editor/CleanCutReview";
 import { Preview } from "./editor/Preview";
 import { TranscriptPanel } from "./editor/TranscriptPanel";
 import { TranslateModal, TranslateRequest } from "./editor/TranslateModal";
+import { CoverEditor, FrameSource } from "./editor/CoverEditor";
+import { CoverDesign, emptyCover } from "./editor/cover";
 import { analyzeCleanCut, CleanCutItem, CleanCutSettings, defaultCleanCutSettings, deriveSentences, silenceItems, timelineTranscript, TranscriptWord, wordsToCuts } from "./editor/transcript";
 import { clampZoom, DropTarget, formatClock, Timeline, TimelineMode, TimelineSettings, TimelineToolbar, Toggles, ToolbarAction } from "./editor/Timeline";
 
@@ -120,10 +122,8 @@ export default function Home() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [coverOpen, setCoverOpen] = useState(false);
   const [coverImage, setCoverImage] = useState("");
-  const [coverBackground, setCoverBackground] = useState("");
   const [aboutOpen, setAboutOpen] = useState(false);
-  const [coverTitle, setCoverTitle] = useState("独自旅行的 48 小时");
-  const [coverAccent, setCoverAccent] = useState("#ffcc45");
+  const [cover, setCover] = useState<CoverDesign>(emptyCover);
   const [exportOpen, setExportOpen] = useState(false);
   const [exportFps, setExportFps] = useState<30 | 60>(60);
   const [exportResolution, setExportResolution] = useState<720 | 1080 | 2160>(1080);
@@ -172,7 +172,6 @@ export default function Home() {
   const [cleanCut, setCleanCut] = useState<{ clipIds?: string[]; scope: string; silences: CleanCutItem[] } | null>(null);
   const [autoTranslate, setAutoTranslate] = useState(true);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
   const currentRef = useRef(0);
   const recorderRef = useRef<{ recorder: MediaRecorder; stream: MediaStream; chunks: Blob[]; start: number } | null>(null);
 
@@ -1260,81 +1259,21 @@ export default function Home() {
     }
   }
 
-  async function applyCurrentFrameToCover() {
-    const main = mainTrack(project).id;
-    const clip = clipAt(project, main, current) ?? trackClips(project, main)[0];
-    const asset = clip && assetMap.get(clip.assetId);
-    if (!clip || !asset) return setToast(t("主轨上没有画面"));
-    setCoverBackground(await captureFrame(asset, sourceTimeAt(clip, Math.max(current, clip.start))));
-  }
-
-  function renderCover(download = false) {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    canvas.width = 1280;
-    canvas.height = 720;
-    const finish = () => {
-      ctx.fillStyle = "rgba(8, 13, 25, .58)";
-      ctx.fillRect(65, 68, 760, 575);
-      ctx.fillStyle = coverAccent;
-      ctx.fillRect(65, 68, 16, 575);
-      ctx.fillStyle = "#ffffff";
-      ctx.font = "800 72px Arial, sans-serif";
-      const words = coverTitle.split(" ");
-      const first = words.slice(0, Math.ceil(words.length / 2)).join(" ");
-      const second = words.slice(Math.ceil(words.length / 2)).join(" ");
-      ctx.fillText(first, 125, 285, 640);
-      if (second) ctx.fillText(second, 125, 385, 640);
-      ctx.fillStyle = coverAccent;
-      ctx.font = "700 28px Arial, sans-serif";
-      ctx.fillText("TRAVEL VLOG  ·  EP. 08", 126, 510);
-      ctx.fillStyle = "rgba(255,255,255,.84)";
-      ctx.font = "500 22px Arial, sans-serif";
-      ctx.fillText(t("DASHCUT 极剪原创视频"), 126, 565);
-      if (download) {
-        const data = canvas.toDataURL("image/png");
-        setCoverImage(data);
-        const link = document.createElement("a");
-        link.href = data;
-        link.download = t("视频封面.png");
-        link.click();
-        setToast(t("封面图已保存"));
-      }
+  /** The picture the cover frame picker shows at a timeline time: the main track first, then any visible overlay. */
+  function coverFrameAt(time: number): FrameSource {
+    const visual = (clip: Clip | null | undefined) => {
+      const asset = clip && assetMap.get(clip.assetId);
+      return asset && asset.kind !== "audio" && asset.kind !== "text" ? { asset, sourceTime: sourceTimeAt(clip, time) } : null;
     };
-    if (coverBackground) {
-      const image = new Image();
-      image.onload = () => {
-        const scale = Math.max(1280 / image.width, 720 / image.height);
-        ctx.drawImage(image, (1280 - image.width * scale) / 2, (720 - image.height * scale) / 2, image.width * scale, image.height * scale);
-        finish();
-      };
-      image.src = coverBackground;
-      return;
+    const main = mainTrack(project).id;
+    const fromMain = visual(clipAt(project, main, time));
+    if (fromMain) return fromMain;
+    for (const track of project.tracks) if (track.kind === "video" && !track.hidden && track.id !== main) {
+      const found = visual(clipAt(project, track.id, time));
+      if (found) return found;
     }
-    const bg = ctx.createLinearGradient(0, 0, 1280, 720);
-    bg.addColorStop(0, "#173461");
-    bg.addColorStop(0.55, "#2b6670");
-    bg.addColorStop(1, "#e18b58");
-    ctx.fillStyle = bg;
-    ctx.fillRect(0, 0, 1280, 720);
-    ctx.globalAlpha = 0.2;
-    for (let i = 0; i < 11; i++) {
-      ctx.fillStyle = i % 2 ? "#ffffff" : coverAccent;
-      ctx.beginPath();
-      ctx.arc(110 + i * 130, 120 + (i % 3) * 190, 80 + (i % 2) * 60, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    ctx.globalAlpha = 1;
-    finish();
+    return null;
   }
-
-  useEffect(() => {
-    // Canvas drawing is an imperative synchronization with the cover editor.
-    if (coverOpen) renderCover(false);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [coverOpen, coverTitle, coverAccent, coverBackground]);
 
   const mainThumb = assetMap.get(trackClips(project, mainTrack(project).id)[0]?.assetId ?? "")?.thumbnail ?? "";
   const filteredAssets = assets.filter((asset) => asset.kind !== "text").filter((asset) => mediaFilter === "all" || (mediaFilter === "image" ? asset.kind === "image" || asset.kind === "gif" : asset.kind === mediaFilter));
@@ -1556,15 +1495,15 @@ export default function Home() {
       captionStyle: subtitleStyle,
       captionMode: subtitleMode,
       exportSettings: { resolution: exportResolution, fps: exportFps, platform, format: exportFormat, codec: exportCodec, loudnessTarget },
-      cover: { title: coverTitle, accent: coverAccent },
+      cover,
     };
   }
 
   // Everything that is written to disk except the save timestamp; changes mark the project dirty.
   const fingerprint = useMemo(() => {
-    const doc = buildDocument({ id: projectMeta.id, title: projectMeta.title, createdAt: projectMeta.createdAt, ratio, project, assets, captionStyle: subtitleStyle, captionMode: subtitleMode, exportSettings: { resolution: exportResolution, fps: exportFps, platform, format: exportFormat, codec: exportCodec, loudnessTarget }, cover: { title: coverTitle, accent: coverAccent } }, new Date(0));
+    const doc = buildDocument({ id: projectMeta.id, title: projectMeta.title, createdAt: projectMeta.createdAt, ratio, project, assets, captionStyle: subtitleStyle, captionMode: subtitleMode, exportSettings: { resolution: exportResolution, fps: exportFps, platform, format: exportFormat, codec: exportCodec, loudnessTarget }, cover }, new Date(0));
     return JSON.stringify(doc);
-  }, [assets, coverAccent, coverTitle, exportCodec, exportFormat, exportFps, exportResolution, loudnessTarget, platform, project, projectMeta, ratio, subtitleMode, subtitleStyle]);
+  }, [assets, cover, exportCodec, exportFormat, exportFps, exportResolution, loudnessTarget, platform, project, projectMeta, ratio, subtitleMode, subtitleStyle]);
   const dirty = savedFingerprint === null ? project.clips.length > 0 || assets.length > 0 : fingerprint !== savedFingerprint;
 
   useEffect(() => {
@@ -1628,8 +1567,8 @@ export default function Home() {
     setExportCodec(state.exportSettings.codec ?? "h264");
     setLoudnessTarget(state.exportSettings.loudnessTarget === undefined ? -14 : state.exportSettings.loudnessTarget);
     setPlatform(state.exportSettings.platform);
-    setCoverTitle(state.cover.title || coverTitle);
-    setCoverAccent(state.cover.accent || coverAccent);
+    setCover(state.cover);
+    setCoverImage("");
     setSelection([]);
     seek(0);
     setMissingAssets(missing);
@@ -1887,15 +1826,8 @@ export default function Home() {
 
     {cropClip && cropAsset && <CropModal clip={cropClip} asset={cropAsset} onClose={() => setCropOpen(false)} onApply={(crop) => { commit((state) => updateClip(state, cropClip.id, { crop }, options)); setCropOpen(false); }} />}
 
-    {coverOpen && <div className="modal-backdrop" onMouseDown={() => setCoverOpen(false)}><section className="cover-modal" onMouseDown={(event) => event.stopPropagation()}>
-      <header><div><span className="eyebrow">COVER STUDIO</span><h2>{t("编辑封面")}</h2></div><button onClick={() => setCoverOpen(false)}>×</button></header>
-      <div className="cover-workspace"><div className="canvas-wrap"><canvas ref={canvasRef}></canvas><span>1280 × 720 · 16:9</span></div><aside>
-        <label>{t("封面标题")}<input value={coverTitle} maxLength={24} onChange={(event) => setCoverTitle(event.target.value)} /></label>
-        <label>{t("强调色")}<div className="color-options">{["#ffcc45", "#56e0c7", "#ff7289", "#8ba8ff"].map((color) => <button key={color} className={coverAccent === color ? "active" : ""} style={{ background: color }} onClick={() => setCoverAccent(color)} />)}</div></label>
-        <label>{t("背景")}<div className="platform-preview"><button className={coverBackground ? "" : "active"} onClick={() => setCoverBackground("")}>{t("渐变预设")}</button><button className={coverBackground ? "active" : ""} onClick={() => void applyCurrentFrameToCover()}>{t("当前画面")}</button></div></label>
-        <button className="primary full" onClick={() => renderCover(true)}>{t("保存封面 PNG")}</button>
-      </aside></div>
-    </section></div>}
+    {coverOpen && <CoverEditor design={cover} ratio={ratio} duration={duration} initialTime={current} frameAt={coverFrameAt} onChange={setCover}
+      onApply={(png) => { setCoverImage(cover.layers.length ? png : ""); }} onClose={() => setCoverOpen(false)} />}
 
     {exportOpen && <div className="modal-backdrop export-backdrop" onMouseDown={() => !exporting && setExportOpen(false)}><section className="export-modal" onMouseDown={(event) => event.stopPropagation()}>
       <header><div><span className="eyebrow">EXPORT</span><h2>{t("导出")}</h2></div><button onClick={() => !exporting && setExportOpen(false)}>×</button></header>

@@ -4,7 +4,7 @@
 
 ## 1. Overview
 
-DashCut (极剪) is a desktop-first video editor for Bilibili and YouTube creators. It focuses on the repetitive work around creator videos: import multiple clips, split and rearrange a timeline, add background music, generate a 1280 × 720 cover image, create time-aligned Chinese or English captions with local `faster-whisper`, apply one font/color/size style to every caption, and prepare 30 or 60 FPS exports. The local AI workflow checks CPU, GPU, memory, and disk before recommending a model; model weights are never downloaded until the user explicitly clicks install, and packaged users do not need to configure Python or other AI dependencies.
+DashCut (极剪) is a desktop-first video editor for Bilibili and YouTube creators. It focuses on the repetitive work around creator videos: import multiple clips, split and rearrange a timeline, add background music, design a cover image, create time-aligned Chinese or English captions with local `faster-whisper`, apply one font/color/size style to every caption, and prepare 30 or 60 FPS exports. The local AI workflow checks CPU, GPU, memory, and disk before recommending a model; model weights are never downloaded until the user explicitly clicks install, and packaged users do not need to configure Python or other AI dependencies.
 
 Highlights:
 
@@ -61,7 +61,7 @@ Windows x64 releases produce an unsigned one-click `.exe` without credentials; W
    In the library, ⌘A selects all, ⌘C/⌘X/⌘V copy, cut and paste entries (⌘V on the timeline places them at the playhead), and ⌘/⇧-click selects several.
 3. Use the toolbar above the timeline: import, select/blade mode, undo/redo/reset, split, trim left/right, delete, marker, freeze, reverse, mirror, rotate, crop, smart talk cut, smart scene split and a voice-over recorder with a 3-second countdown. Toggles on the right control main-track magnet, snapping, linkage and the hover preview axis; −/+ zooms the timeline and **…** sets track height and waveform size.
 4. Select a clip to edit it in the right-hand panel: picture (scale, position, rotation, opacity, mirror, crop), audio (volume, fades, sound tools), speed, in/out animations, colour adjustment and AI effects. Preview and export use the same settings.
-5. Click the cover tile at the left of the main track to design a 1280 × 720 thumbnail.
+5. Click the cover tile at the left of the main track to open the cover studio: upload one or more pictures (several at once are laid out as a collage, with side-by-side, stacked, grid and one-large layouts), drag the frame slider to pick any video frame as the background or as an extra layer, and add your own text boxes with font, size, color, stroke, shadow and box. Drag layers to move them and use the handles to resize. The cover is 1920 × 1080 (or 1080 × 1920 for 9:16) and is saved with the project.
 
 ### Original audio and sound tools
 

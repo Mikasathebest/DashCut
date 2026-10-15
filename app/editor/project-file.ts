@@ -2,6 +2,7 @@
 import type { SubtitleStyle } from "./captions";
 import type { Asset, Clip, Marker, Project, Subtitle, Track } from "./model";
 import { t } from "../i18n/index.ts";
+import { normalizeCover, type CoverDesign } from "./cover.ts";
 
 export const projectSchemaVersion = 2;
 export const projectExtension = "dashcut";
@@ -53,7 +54,7 @@ export type ProjectDocument = {
   captionStyle: CaptionStyle;
   captionMode: CaptionMode;
   exportSettings: ExportSettings;
-  cover: { title: string; accent: string };
+  cover: CoverDesign;
 };
 
 export type EditorState = {
@@ -66,7 +67,7 @@ export type EditorState = {
   captionStyle: CaptionStyle;
   captionMode: CaptionMode;
   exportSettings: ExportSettings;
-  cover: { title: string; accent: string };
+  cover: CoverDesign;
 };
 
 export function buildDocument(state: EditorState, now = new Date()): ProjectDocument {
@@ -170,6 +171,6 @@ export function readDocument(doc: ProjectDocument, resolveUrl: (absolutePath: st
     captionStyle: doc.captionStyle,
     captionMode: doc.captionMode,
     exportSettings: doc.exportSettings,
-    cover: doc.cover,
+    cover: normalizeCover(doc.cover),
   };
 }
