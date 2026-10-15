@@ -353,25 +353,78 @@ function visualLayerChain(visual, index, inputLabel, settings) {
   return { chain, layerLabel, overlay: `overlay=x='${x}':y='${y}':eof_action=pass:repeatlast=0:format=auto:enable='${enable}'`, start, end };
 }
 
-function audioEffectFilters(effects) {
+// Gentle vocal polish: rumble cut, a little low warmth, presence lift, softened sibilance and light
+// compression. Net boost stays ≤ +3 dB so a -6 dBFS signal does not clip.
+const VOICE_BEAUTIFY = [
+  "highpass=f=90",
+  "lowshelf=f=200:g=1.5",
+  "equalizer=f=3000:t=q:w=1:g=3",
+  "highshelf=f=8000:g=-3",
+  "acompressor=threshold=0.25:ratio=2:attack=15:release=250:makeup=1",
+];
+
+function audioEffectFilters(effects, settings = {}) {
   const filters = [];
+  const target = settings.loudnessTarget;
+  const loudness = target === null || target === undefined || !Number.isFinite(Number(target)) ? -16 : clamp(Number(target), -70, -5);
   for (const effect of Array.isArray(effects) ? effects : []) {
     if (effect === "denoise") filters.push("afftdn=nr=12:nf=-40");
     else if (effect === "voice-enhance") filters.push("highpass=f=80", "acompressor=threshold=0.125:ratio=3:attack=10:release=200:makeup=1.5");
-    else if (effect === "loudnorm") filters.push("loudnorm=I=-16:TP=-1.5:LRA=11", "aresample=48000");
+    else if (effect === "voice-beautify") filters.push(...VOICE_BEAUTIFY);
+    else if (effect === "loudnorm") filters.push(`loudnorm=I=${f(loudness)}:TP=-1.5:LRA=11`, "aresample=48000");
   }
   return filters;
 }
 
-/** Audio chain for one clip: trim (input side) → reverse → speed → effects → volume → fades → delay. */
+/** Pitch shift in semitones (-12..12) as a resampling ratio; 1 when unset. */
+function pitchRatio(settings) {
+  const semitones = clamp(num(settings?.pitch, 0), -12, 12);
+  return Math.abs(semitones) < 1e-6 ? 1 : 2 ** (semitones / 12);
+}
+
+/**
+ * Speed and pitch together: asetrate raises the pitch (and tempo) by r, aresample returns to
+ * 48 kHz and one atempo chain applies speed / r, so the clip still lasts (out - in) / speed.
+ */
+function speedPitchFilters(speed, ratio) {
+  if (ratio === 1) return atempoChain(speed);
+  const rate = Math.round(48000 * ratio);
+  return [`asetrate=${rate}`, "aresample=48000", ...atempoChain((speed * 48000) / rate)];
+}
+
+/** Channel layout remap on the stereo signal (mono sources are upmixed before this). */
+function channelFilters(layout) {
+  if (layout === "left") return ["pan=stereo|c0=c0|c1=c0"];
+  if (layout === "right") return ["pan=stereo|c0=c1|c1=c1"];
+  if (layout === "mono") return ["pan=stereo|c0=0.5*c0+0.5*c1|c1=0.5*c0+0.5*c1"];
+  if (layout === "swap") return ["pan=stereo|c0=c1|c1=c0"];
+  return [];
+}
+
+/**
+ * Stereo balance -1..1 with the equal-power (sin/cos) law, normalised to unity at the centre and
+ * capped at unity: the far side follows √2·cos/sin of θ = (pan + 1)·π/4, the near side stays at 1.
+ */
+function panFilters(value) {
+  const pan = clamp(num(value, 0), -1, 1);
+  if (Math.abs(pan) < 1e-6) return [];
+  const theta = ((pan + 1) * Math.PI) / 4;
+  const left = Math.min(1, Math.SQRT2 * Math.cos(theta));
+  const right = Math.min(1, Math.SQRT2 * Math.sin(theta));
+  return [`pan=stereo|c0=${f(left)}*c0|c1=${f(right)}*c1`];
+}
+
+/** Audio chain for one clip: trim (input side) → reverse → speed/pitch → channels → pan → effects → volume → fades → delay. */
 function audioClipChain(clip, inputLabel, outLabel, options = {}) {
   const settings = clip.audio || {};
   const start = Math.max(0, num(clip.start));
   const length = clipDuration(clip, "audio");
   const filters = ["asetpts=PTS-STARTPTS", "aresample=48000", "aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo"];
   if (options.reverse) filters.push("areverse");
-  filters.push(...atempoChain(clipSpeed(clip)));
-  filters.push(...audioEffectFilters(settings.effects));
+  filters.push(...speedPitchFilters(clipSpeed(clip), pitchRatio(settings)));
+  filters.push(...channelFilters(settings.channels));
+  filters.push(...panFilters(settings.pan));
+  filters.push(...audioEffectFilters(settings.effects, settings));
   filters.push(`atrim=duration=${f(length)}`, "asetpts=PTS-STARTPTS");
   // After atrim/asetpts (and before adelay) t is clip-local timeline time, i.e. after the speed
   // change, which is how volume keyframe times are defined.
@@ -417,21 +470,32 @@ function buildCompositionGraph(request, options = {}) {
     const settingsAudio = visual.audio || {};
     const hasAudio = !videoOnly && visual.kind === "video" && visual.hasAudio && !settingsAudio.muted && !isFrozen(visual) && !silentVisuals.has(index);
     if (audioOnly && !hasAudio) return;
-    const sourcePath = sources[index] || visual.path;
-    inputs.push(...visualInputArgs(visual, fps, sourcePath));
-    if (!audioOnly) {
-      const layer = visualLayerChain(visual, index, `${inputIndex}:v:0`, settings);
-      chains.push(layer.chain);
-      const next = `base${index + 1}`;
-      chains.push(`[${current}][${layer.layerLabel}]${layer.overlay}[${next}]`);
-      current = next;
+    // A separate audio source (e.g. a separated stem) is a full-length render of the same media,
+    // so it is read with the same in/out range and gets its own input after the picture input.
+    const audioPath = hasAudio && typeof visual.audioPath === "string" && visual.audioPath ? visual.audioPath : null;
+    let audioInput = inputIndex;
+    if (!audioOnly || !audioPath) {
+      const sourcePath = sources[index] || visual.path;
+      inputs.push(...visualInputArgs(visual, fps, sourcePath));
+      if (!audioOnly) {
+        const layer = visualLayerChain(visual, index, `${inputIndex}:v:0`, settings);
+        chains.push(layer.chain);
+        const next = `base${index + 1}`;
+        chains.push(`[${current}][${layer.layerLabel}]${layer.overlay}[${next}]`);
+        current = next;
+      }
+      inputIndex += 1;
+    }
+    if (audioPath) {
+      inputs.push("-ss", f(Math.max(0, num(visual.in))), "-t", f(Math.max(0, num(visual.out) - num(visual.in))), "-i", audioPath);
+      audioInput = inputIndex;
+      inputIndex += 1;
     }
     if (hasAudio) {
       const label = `va${index}`;
-      chains.push(audioClipChain(visual, `${inputIndex}:a:0`, label, { reverse: Boolean(visual.reverse) }));
+      chains.push(audioClipChain(visual, `${audioInput}:a:0`, label, { reverse: Boolean(visual.reverse) }));
       audioLabels.push(label);
     }
-    inputIndex += 1;
   });
 
   const audios = videoOnly ? [] : (Array.isArray(request.audios) ? request.audios : []).filter((clip) => clipDuration(clip, "audio") > 0 && num(clip.start) < duration && !clip.audio?.muted);
@@ -606,8 +670,10 @@ async function prepareInputs(request, options, tempDir, { stills = true, audio =
   const audioChecks = new Map();
   for (const [index, visual] of audio ? usable.entries() : []) {
     if (visual.kind !== "video" || !visual.hasAudio || visual.audio?.muted || isFrozen(visual)) continue;
-    if (!audioChecks.has(visual.path)) audioChecks.set(visual.path, probeHasAudio(visual.path, options));
-    if (!(await audioChecks.get(visual.path))) silentVisuals.add(index);
+    // The audio comes from audioPath when set, so that is the file that must carry a stream.
+    const audioSource = typeof visual.audioPath === "string" && visual.audioPath ? visual.audioPath : visual.path;
+    if (!audioChecks.has(audioSource)) audioChecks.set(audioSource, probeHasAudio(audioSource, options));
+    if (!(await audioChecks.get(audioSource))) silentVisuals.add(index);
   }
   return { sources, silentVisuals };
 }
@@ -786,6 +852,7 @@ module.exports = {
   keyframeExpression,
   keyframeValue,
   normalizeOutput,
+  panFilters,
   parseEbur128Summary,
   parseLoudnormJson,
   parseSilences,

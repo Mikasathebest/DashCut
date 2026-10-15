@@ -10,7 +10,7 @@ import test from "node:test";
 const require = createRequire(import.meta.url);
 const execFileAsync = promisify(execFile);
 const { resolveFfmpegExecutable } = require("../electron/video-export.cjs");
-const { analyzeComposition, atempoChain, buildCompositionGraph, clipDuration, exportComposition, keyframeExpression, keyframeValue, normalizeOutput, parseEbur128Summary, parseLoudnormJson, parseSilences } = require("../electron/composition-export.cjs");
+const { analyzeComposition, atempoChain, buildCompositionGraph, clipDuration, exportComposition, keyframeExpression, keyframeValue, normalizeOutput, panFilters, parseEbur128Summary, parseLoudnormJson, parseSilences } = require("../electron/composition-export.cjs");
 const ffmpeg = resolveFfmpegExecutable();
 const ffmpegAvailable = spawnSync(ffmpeg, ["-hide_banner", "-version"], { windowsHide: true }).status === 0;
 
@@ -675,6 +675,177 @@ test("analyses loudness, silences and black frames without writing a file", { ti
     assert.equal(silent.integratedLufs, null);
     assert.equal(silent.truePeak, null);
     assert.deepEqual(silent.silences, [{ start: 0, end: 6 }]);
+  } finally {
+    await rm(work, { recursive: true, force: true });
+  }
+});
+
+test("audio chain applies pitch, channel layout, pan, voice beautify and the loudnorm target in order", () => {
+  const graph = buildCompositionGraph({
+    width: 320, height: 180, fps: 30, duration: 4,
+    visuals: [visual({ path: "/media/a.mp4", out: 2, speed: 2, reverse: true, hasAudio: true, audio: { ...quietAudio, pitch: 12, channels: "left", pan: 0.5, effects: ["voice-beautify", "loudnorm"], loudnessTarget: -20, volume: 0.5, fadeIn: 0.2 } })],
+    audios: [
+      { path: "/media/m.m4a", start: 1, in: 0, out: 2, speed: 1, audio: { ...quietAudio, pitch: -12, channels: "swap", pan: -1, effects: ["loudnorm"] } },
+      { path: "/media/n.m4a", start: 0, in: 0, out: 2, speed: 1, audio: { ...quietAudio, channels: "mono", pan: 0, pitch: 0 } },
+      { path: "/media/o.m4a", start: 0, in: 0, out: 2, speed: 1, audio: { ...quietAudio, channels: "right" } },
+    ],
+  });
+  const lines = graph.filterGraph.split(";\n");
+  const visualAudio = lines.find((line) => line.endsWith("[va0]"));
+  // Reverse → asetrate ×2 → back to 48 kHz → atempo speed/r = 1 (dropped) → channels → pan → effects → volume → fades.
+  assert.match(visualAudio, /^\[0:a:0\]asetpts=PTS-STARTPTS,aresample=48000,aformat=[^,]*,areverse,asetrate=96000,aresample=48000,pan=stereo\|c0=c0\|c1=c0,pan=stereo\|c0=0\.541196\*c0\|c1=1\*c1,highpass=f=90,lowshelf=f=200:g=1\.5,equalizer=f=3000:t=q:w=1:g=3,highshelf=f=8000:g=-3,acompressor=[^,]*,loudnorm=I=-20:TP=-1\.5:LRA=11,aresample=48000,atrim=duration=1,asetpts=PTS-STARTPTS,volume=0\.5,afade=t=in/);
+  assert.doesNotMatch(visualAudio, /atempo/, "speed 2 and +12 semitones cancel into a single asetrate");
+  const pitchedDown = lines.find((line) => line.endsWith("[aa0]"));
+  assert.match(pitchedDown, /asetrate=24000,aresample=48000,atempo=2,pan=stereo\|c0=c1\|c1=c0,pan=stereo\|c0=1\*c0\|c1=0\*c1,loudnorm=I=-16:/, "loudnorm defaults to -16 LUFS");
+  const mono = lines.find((line) => line.endsWith("[aa1]"));
+  assert.match(mono, /pan=stereo\|c0=0\.5\*c0\+0\.5\*c1\|c1=0\.5\*c0\+0\.5\*c1,atrim/);
+  assert.doesNotMatch(mono, /asetrate|c0=[\d.]+\*c0\|c1=[\d.]+\*c1/, "pitch 0 and pan 0 are no-ops");
+  assert.match(lines.find((line) => line.endsWith("[aa2]")), /pan=stereo\|c0=c1\|c1=c1,atrim/);
+
+  // Pitch keeps the clip length for any speed: asetrate's r is cancelled by the atempo chain.
+  for (const [pitch, speed] of [[7, 1], [-5, 0.25], [12, 3], [-12, 10]]) {
+    const line = buildCompositionGraph({ width: 320, height: 180, fps: 30, duration: 4, visuals: [], audios: [{ path: "/a.wav", start: 0, in: 0, out: 2, speed, audio: { ...quietAudio, pitch } }] }).filterGraph.split(";\n").find((chain) => chain.endsWith("[aa0]"));
+    const rate = Number(line.match(/asetrate=(\d+)/)[1]);
+    const tempo = [...line.matchAll(/atempo=([\d.]+)/g)].map((match) => Number(match[1]));
+    assert.ok(tempo.every((value) => value >= 0.5 && value <= 2), `atempo factors within 0.5-2: ${tempo}`);
+    const stretch = (48000 / rate) / tempo.reduce((product, value) => product * value, 1);
+    assert.ok(Math.abs(stretch - 1 / speed) < 1e-4, `pitch ${pitch} speed ${speed}: duration factor ${stretch}`);
+    assert.ok(Math.abs(rate / 48000 - 2 ** (pitch / 12)) < 1e-4);
+  }
+
+  // Equal-power balance normalised to unity at the centre.
+  assert.deepEqual(panFilters(0), []);
+  assert.deepEqual(panFilters(1), ["pan=stereo|c0=0*c0|c1=1*c1"]);
+  assert.deepEqual(panFilters(-1), ["pan=stereo|c0=1*c0|c1=0*c1"]);
+  assert.deepEqual(panFilters(5), panFilters(1), "pan is clamped");
+});
+
+test("visual audio can come from a separate audioPath with the same timing", () => {
+  const request = {
+    width: 320, height: 180, fps: 30, duration: 4,
+    visuals: [
+      visual({ path: "/media/a.mp4", in: 1, out: 3, hasAudio: true, audioPath: "/stems/a.vocals.wav" }),
+      visual({ path: "/media/b.mp4", out: 2, hasAudio: true }),
+    ],
+    audios: [{ path: "/media/m.m4a", start: 0, in: 0, out: 2, speed: 1, audio: quietAudio }],
+  };
+  const graph = buildCompositionGraph(request);
+  assert.match(graph.inputs.join(" "), /^-ss 1 -t 2 -i \/media\/a\.mp4 -ss 1 -t 2 -i \/stems\/a\.vocals\.wav -ss 0 -t 2 -i \/media\/b\.mp4 -ss 0 -t 2 -i \/media\/m\.m4a$/);
+  const g = graph.filterGraph;
+  assert.match(g, /\[0:v:0\][^\n]*\[layer0\]/);
+  assert.match(g, /\[1:a:0\][^\n]*\[va0\]/);
+  assert.doesNotMatch(g, /\[0:a:0\]/, "the picture file's audio is not used");
+  assert.match(g, /\[2:v:0\][^\n]*\[layer1\]/);
+  assert.match(g, /\[2:a:0\][^\n]*\[va1\]/);
+  assert.match(g, /\[3:a:0\][^\n]*\[aa0\]/);
+
+  const audioOnly = buildCompositionGraph(request, { audioOnly: true });
+  assert.match(audioOnly.inputs.join(" "), /^-ss 1 -t 2 -i \/stems\/a\.vocals\.wav -ss 0 -t 2 -i \/media\/b\.mp4 -ss 0 -t 2 -i \/media\/m\.m4a$/, "audio-only exports skip the picture file");
+  assert.match(audioOnly.filterGraph, /\[0:a:0\][^\n]*\[va0\]/);
+  assert.match(audioOnly.filterGraph, /\[1:a:0\][^\n]*\[va1\]/);
+
+  const muted = buildCompositionGraph({ ...request, visuals: [visual({ path: "/media/a.mp4", out: 2, hasAudio: true, audioPath: "/stems/a.wav", audio: { ...quietAudio, muted: true } })] });
+  assert.doesNotMatch(muted.inputs.join(" "), /stems/, "muted clips do not read their stem");
+  const silent = buildCompositionGraph(request, { silentVisuals: new Set([0]) });
+  assert.doesNotMatch(silent.inputs.join(" "), /stems/, "a stem without audio is treated as silent");
+});
+
+/** Decodes the audio of `file` to stereo float samples at 48 kHz. */
+async function decodeStereo(file) {
+  const { stdout } = await ffmpegRun(["-v", "error", "-i", file, "-map", "0:a", "-ac", "2", "-ar", "48000", "-f", "f32le", "-acodec", "pcm_f32le", "-"]);
+  const samples = new Float32Array(stdout.buffer.slice(stdout.byteOffset, stdout.byteOffset + Math.floor(stdout.length / 8) * 8));
+  const left = new Float32Array(samples.length / 2);
+  const right = new Float32Array(samples.length / 2);
+  for (let i = 0; i < left.length; i += 1) {
+    left[i] = samples[2 * i];
+    right[i] = samples[2 * i + 1];
+  }
+  return { left, right };
+}
+
+function rms(channel, from = 0, to = channel.length) {
+  let sum = 0;
+  for (let i = from; i < to; i += 1) sum += channel[i] * channel[i];
+  return Math.sqrt(sum / Math.max(1, to - from));
+}
+
+/** Dominant frequency of a pure tone from its positive-going zero crossings. */
+function zeroCrossingFrequency(channel, from = 0, to = channel.length) {
+  let crossings = 0;
+  for (let i = from + 1; i < to; i += 1) if (channel[i - 1] < 0 && channel[i] >= 0) crossings += 1;
+  return (crossings * 48000) / (to - from);
+}
+
+/** End (seconds) of the last 10 ms window above -40 dBFS RMS. */
+function signalEnd(channel) {
+  const window = 480;
+  for (let end = Math.floor(channel.length / window) * window; end >= window; end -= window) if (rms(channel, end - window, end) > 0.01) return end / 48000;
+  return 0;
+}
+
+test("exports channel layouts, pan, pitch, audioPath stems and voice beautify", { timeout: 300_000, skip: !ffmpegAvailable }, async () => {
+  const work = await mkdtemp(path.join(tmpdir(), "dashcut-composition-audio-tools-"));
+  const leftOnly = path.join(work, "left-only.wav");
+  const tone440 = path.join(work, "tone440.wav");
+  const stem660 = path.join(work, "stem660.wav");
+  const clip440 = path.join(work, "clip440.mp4");
+  const pictureOnly = path.join(work, "picture-only.mp4");
+  const sweep = path.join(work, "sweep.wav");
+  const render = async (name, overrides, format = "wav") => {
+    const output = path.join(work, `${name}.${format}`);
+    await exportComposition({ output: { format, codec: "h264", loudnessTarget: null }, width: 160, height: 90, fps: 30, platform: "youtube", duration: 1, visuals: [], audios: [], subtitles: [], subtitleStyle: {}, ...overrides }, { outputPath: output, tempPath: work, ffmpegPath: ffmpeg, platform: process.platform });
+    return output;
+  };
+  const audioClip = (file, audio, extra = {}) => ({ path: file, start: 0, in: 0, out: 1, speed: 1, audio: { ...quietAudio, ...audio }, ...extra });
+  try {
+    await ffmpegRun(["-f", "lavfi", "-i", "aevalsrc=0.5*sin(440*2*PI*t)|0:c=stereo:s=48000:d=1.5", "-c:a", "pcm_s16le", leftOnly]);
+    await ffmpegRun(["-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=2.5", "-c:a", "pcm_s16le", tone440]);
+    await ffmpegRun(["-f", "lavfi", "-i", "sine=frequency=660:sample_rate=48000:duration=1.5", "-c:a", "pcm_s16le", stem660]);
+    await ffmpegRun(["-f", "lavfi", "-i", "color=c=red:s=160x90:r=30:d=1.5", "-f", "lavfi", "-i", "sine=frequency=440:duration=1.5", "-shortest", "-c:v", "mpeg4", "-pix_fmt", "yuv420p", "-c:a", "aac", clip440]);
+    await ffmpegRun(["-f", "lavfi", "-i", "color=c=red:s=160x90:r=30:d=1.5", "-c:v", "mpeg4", "-pix_fmt", "yuv420p", pictureOnly]);
+    // Exponential 50 Hz → 16 kHz sweep at -6 dBFS.
+    await ffmpegRun(["-f", "lavfi", "-i", "aevalsrc=0.5*sin(2*PI*50*(exp(t*log(320))-1)/log(320)):s=48000:d=1", "-c:a", "pcm_s16le", sweep]);
+    const middle = [4800, 43200];
+
+    // (a) channels=left copies the left tone to both sides; swap moves it to the right.
+    const source = await decodeStereo(leftOnly);
+    assert.ok(rms(source.right) < 1e-3 && rms(source.left) > 0.3, "fixture is left-only");
+    const left = await decodeStereo(await render("left", { audios: [audioClip(leftOnly, { channels: "left" })] }));
+    assert.ok(rms(left.left, ...middle) > 0.3 && rms(left.right, ...middle) > 0.3, `left on both sides: ${rms(left.left, ...middle)} / ${rms(left.right, ...middle)}`);
+    const swapped = await decodeStereo(await render("swap", { audios: [audioClip(leftOnly, { channels: "swap" })] }));
+    assert.ok(rms(swapped.left, ...middle) < 1e-3 && rms(swapped.right, ...middle) > 0.3, "swap moves the tone to the right");
+
+    // (b) pan=1 on a mono (upmixed) source: left silent, right at the centre level.
+    const panned = await decodeStereo(await render("pan", { audios: [audioClip(tone440, { pan: 1 })] }));
+    const centred = await decodeStereo(await render("centre", { audios: [audioClip(tone440, { pan: 0 })] }));
+    assert.ok(rms(panned.left, ...middle) < 1e-3, `left silent, got ${rms(panned.left, ...middle)}`);
+    assert.ok(rms(panned.right, ...middle) > 0.05 && Math.abs(rms(panned.right, ...middle) - rms(centred.right, ...middle)) < 0.01, "right keeps the centre level");
+
+    // (c) +12 semitones at 2× speed: 880 Hz (not 1760), and the 2 s source still lasts 1 s on the timeline.
+    const pitched = await decodeStereo(await render("pitch", { duration: 1.5, audios: [audioClip(tone440, { pitch: 12 }, { out: 2, speed: 2 })] }));
+    const frequency = zeroCrossingFrequency(pitched.left, ...middle);
+    assert.ok(Math.abs(frequency - 880) < 15, `expected ~880 Hz, got ${frequency}`);
+    const end = signalEnd(pitched.left);
+    assert.ok(Math.abs(end - 1) <= 1 / 30, `pitched clip ends at ~1 s, got ${end}`);
+    const lowered = await decodeStereo(await render("pitch-down", { duration: 1.5, audios: [audioClip(tone440, { pitch: -12 })] }));
+    const lowFrequency = zeroCrossingFrequency(lowered.left, ...middle);
+    assert.ok(Math.abs(lowFrequency - 220) < 10, `-12 semitones halves the frequency, got ${lowFrequency}`);
+    assert.ok(Math.abs(signalEnd(lowered.left) - 1) <= 1 / 30, `pitched-down clip ends at ~1 s, got ${signalEnd(lowered.left)}`);
+
+    // (d) audioPath replaces the clip's own 440 Hz track with the 660 Hz stem, same in/out (MP4 and WAV).
+    for (const format of ["mp4", "wav"]) {
+      const stem = await decodeStereo(await render(`stem-${format}`, { visuals: [visual({ path: clip440, in: 0.25, out: 1.25, hasAudio: true, audioPath: stem660 })] }, format));
+      const stemFrequency = zeroCrossingFrequency(stem.left, ...middle);
+      assert.ok(Math.abs(stemFrequency - 660) < 15, `${format}: expected the 660 Hz stem, got ${stemFrequency}`);
+    }
+    // A stem without an audio stream renders silence instead of failing.
+    const silentStem = await decodeStereo(await render("stem-silent", { visuals: [visual({ path: clip440, out: 1, hasAudio: true, audioPath: pictureOnly })] }, "mp4"));
+    assert.ok(rms(silentStem.left) < 1e-3, "missing stem audio is silent, not the picture file's track");
+
+    // (e) voice beautify keeps a -6 dBFS sweep below full scale.
+    const polished = await decodeStereo(await render("beautify", { audios: [audioClip(sweep, { effects: ["voice-beautify"] })] }));
+    const peak = polished.left.reduce((max, value) => Math.max(max, Math.abs(value)), 0);
+    assert.ok(peak < 0.98 && peak > 0.1, `beautified sweep peak ${peak}`);
   } finally {
     await rm(work, { recursive: true, force: true });
   }
