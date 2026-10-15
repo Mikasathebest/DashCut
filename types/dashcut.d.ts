@@ -145,6 +145,9 @@ declare global {
       version: string;
       getFilePath(file: File): string;
       listAiModels(config: AiConfig): Promise<AiModel[]>;
+      savedAiKey(): Promise<string>;
+      saveAiKey(key: string): Promise<{ persisted: boolean }>;
+      nativeEdit(command: "copy" | "cut" | "paste" | "undo" | "redo" | "selectAll"): Promise<void>;
       translateSubtitles(request: { config: AiConfig; subtitles: TimedSubtitle[] }): Promise<TimedSubtitle[]>;
       transcribeCloud(request: { config: AiConfig; clips: Array<{ id: number; path: string }> }): Promise<{
         model: string;

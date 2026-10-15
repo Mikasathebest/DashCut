@@ -4,7 +4,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 
-const KINDS = new Set(["openai", "anthropic"]);
+const KINDS = new Set(["openai", "anthropic", "captions"]);
 
 function checkKind(kind) {
   if (!KINDS.has(kind)) throw new Error("不支持的模型提供方");

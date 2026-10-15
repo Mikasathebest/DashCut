@@ -89,3 +89,21 @@ export function retimeSubtitle<T extends Pick<Subtitle, "id" | "start" | "end">>
   const overlap = following.length ? end - following[0].start : 0;
   return [...next, ...(overlap > 0 ? following.map((item) => ({ ...item, start: round(item.start + overlap), end: round(item.end + overlap) })) : following)];
 }
+
+/** Rank chat models for cloud captions: they must hear audio, so only Gemini models qualify. Higher tier beats newer version. */
+export function audioModelScore(id: string, mode = "chat") {
+  const name = id.toLowerCase();
+  if (!["chat", "unknown", ""].includes(mode) || !name.includes("gemini") || /image|tts|embed|live|vision/.test(name)) return -1;
+  const tier = /flash-lite|lite/.test(name) ? 1 : /pro/.test(name) ? 3 : /flash/.test(name) ? 2 : 0;
+  const version = Number(name.match(/gemini-(\d+(?:\.\d+)?)/)?.[1] ?? 0);
+  return tier * 10 + Math.min(version, 9.9) - (/preview|exp/.test(name) ? 0.5 : 0);
+}
+
+export function bestAudioModel(models: Array<{ id: string; mode: string }>) {
+  let best: { id: string; score: number } | null = null;
+  for (const model of models) {
+    const score = audioModelScore(model.id, model.mode);
+    if (score >= 0 && (!best || score > best.score)) best = { id: model.id, score };
+  }
+  return best?.id ?? null;
+}

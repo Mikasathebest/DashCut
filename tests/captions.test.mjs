@@ -29,3 +29,19 @@ test("caption lines follow mode and order; old styles gain new defaults", () => 
   assert.deepEqual(captionLines(captions[0], "en", style).map((line) => line.text), ["one"]);
   assert.deepEqual(captionLines({ zh: "", en: "x" }, "zh", style), []);
 });
+
+test("bestAudioModel prefers the strongest audio-capable Gemini model", async () => {
+  const { bestAudioModel } = await import("../app/editor/captions.ts");
+  const models = [
+    { id: "us/azure/openai/gpt-5", mode: "chat" },
+    { id: "us/gcp/google/gemini-2.5-flash-image", mode: "image_generation" },
+    { id: "us/gcp/google/gemini-2.5-flash", mode: "chat" },
+    { id: "us/gcp/google/gemini-3.5-flash", mode: "chat" },
+    { id: "us/gcp/google/gemini-3.1-flash-lite", mode: "chat" },
+    { id: "gcp/google/gemini-4-argon", mode: "chat" },
+    { id: "us/gcp/google/gemini-2.5-pro", mode: "chat" },
+  ];
+  assert.equal(bestAudioModel(models), "us/gcp/google/gemini-2.5-pro");
+  assert.equal(bestAudioModel(models.slice(0, 5)), "us/gcp/google/gemini-3.5-flash");
+  assert.equal(bestAudioModel([{ id: "gpt-4o-mini", mode: "chat" }]), null);
+});
