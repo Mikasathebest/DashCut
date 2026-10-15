@@ -25,7 +25,9 @@ declare global {
   type KeyframePoint = { time: number; value: number; easing: KeyframeEasing };
   type VisualKeyframes = Partial<Record<"x" | "y" | "scale" | "rotation" | "opacity", KeyframePoint[]>>;
   type VisualEffect = "bw" | "vintage" | "vignette" | "sharpen" | "denoise" | "beauty" | "blur" | "chroma-key";
-  type AudioEffect = "denoise" | "voice-enhance" | "loudnorm";
+  type AudioEffect = "denoise" | "voice-enhance" | "loudnorm" | "voice-beautify";
+  /** stereo: unchanged; left/right: that channel on both sides; mono: L+R averaged; swap: exchange L and R. */
+  type ChannelLayout = "stereo" | "left" | "right" | "mono" | "swap";
   interface ClipAudioSettings {
     volume: number; // 0..2, 1 = unchanged
     fadeIn: number; // seconds
@@ -34,6 +36,15 @@ declare global {
     effects: AudioEffect[];
     /** When present, replaces `volume` over time; fades still apply on top. */
     volumeKeyframes?: KeyframePoint[];
+    /** Stereo balance -1 (left) … 1 (right), equal-power. Default 0. */
+    pan?: number;
+    /** Pitch shift in semitones (-12 … 12) without changing tempo. Default 0. */
+    pitch?: number;
+    channels?: ChannelLayout;
+    /** Keep only part of a separated recording; the editor swaps in the stem file as the audio source. */
+    separation?: "none" | "voice" | "background";
+    /** loudnorm effect target in LUFS (default -16). */
+    loudnessTarget?: number;
   }
   interface CompositionVisual {
     path: string;
@@ -68,6 +79,8 @@ declare global {
     animationOut: { type: AnimationType; duration: number };
     hasAudio: boolean;
     audio: ClipAudioSettings;
+    /** Alternate audio source for this visual (e.g. a separated vocal stem); same timing as `path`. */
+    audioPath?: string;
   }
   interface CompositionAudio {
     path: string;
