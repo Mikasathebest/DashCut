@@ -38,6 +38,7 @@ type ToolbarProps = {
   canUndo: boolean;
   canRedo: boolean;
   hasSelection: boolean;
+  canDelete: boolean;
   selectionIsVideo: boolean;
   recording: "idle" | number | "recording";
   toggles: Toggles;
@@ -49,14 +50,23 @@ type ToolbarProps = {
   onSettings: (settings: TimelineSettings) => void;
 };
 export type ToolbarAction = "import" | "undo" | "redo" | "reset" | "split" | "trim-left" | "trim-right" | "delete" | "marker" | "freeze" | "reverse" | "mirror" | "rotate" | "crop"
-  | "smart-extend" | "smart-talk" | "smart-scenes" | "smart-rough" | "record" | "fit";
+  | "smart-extend" | "smart-talk" | "smart-scenes" | "smart-rough" | "record" | "fit" | "add-video-track" | "add-audio-track";
 
 function ToolButton({ icon, label, onClick, disabled, active, accent }: { icon: string; label: string; onClick: () => void; disabled?: boolean; active?: boolean; accent?: boolean }) {
   return <button className={`tool-button${active ? " active" : ""}${accent ? " accent" : ""}`} title={label} aria-label={label} disabled={disabled} onClick={onClick}><Icon name={icon} /></button>;
 }
 
-export const TimelineToolbar = memo(function TimelineToolbar({ mode, onMode, canUndo, canRedo, hasSelection, selectionIsVideo, recording, toggles, zoom, settings, onAction, onToggle, onZoom, onSettings }: ToolbarProps) {
+export const TimelineToolbar = memo(function TimelineToolbar({ mode, onMode, canUndo, canRedo, hasSelection, canDelete, selectionIsVideo, recording, toggles, zoom, settings, onAction, onToggle, onZoom, onSettings }: ToolbarProps) {
   const [menuOpen, setMenuOpen] = useState(false);
+  // The toolbar scrolls horizontally, so the popover is fixed-positioned under its button.
+  const [trackMenu, setTrackMenu] = useState<{ left: number; top: number } | null>(null);
+  const addTrack = (action: ToolbarAction) => { setTrackMenu(null); onAction(action); };
+  useEffect(() => {
+    if (!trackMenu) return;
+    const close = (event: PointerEvent) => { if (!(event.target as HTMLElement).closest?.(".toolbar-menu")) setTrackMenu(null); };
+    window.addEventListener("pointerdown", close);
+    return () => window.removeEventListener("pointerdown", close);
+  }, [trackMenu]);
   return <div className="timeline-toolbar">
     <div className="toolbar-group">
       <ToolButton icon="plus" label={t("导入新素材")} onClick={() => onAction("import")} accent />
@@ -68,7 +78,18 @@ export const TimelineToolbar = memo(function TimelineToolbar({ mode, onMode, can
       <ToolButton icon="split" label={t("分割 ⌘B")} onClick={() => onAction("split")} />
       <ToolButton icon="trimLeft" label={t("向左裁剪：删除播放头左侧 Q")} disabled={!hasSelection} onClick={() => onAction("trim-left")} />
       <ToolButton icon="trimRight" label={t("向右裁剪：删除播放头右侧 W")} disabled={!hasSelection} onClick={() => onAction("trim-right")} />
-      <ToolButton icon="trash" label={t("删除 ⌫")} disabled={!hasSelection} onClick={() => onAction("delete")} />
+      <ToolButton icon="trash" label={t("删除 ⌫")} disabled={!canDelete} onClick={() => onAction("delete")} />
+      <div className="toolbar-menu" onClick={(event) => {
+        if (trackMenu) return setTrackMenu(null);
+        const rect = (event.target as HTMLElement).closest("button")?.getBoundingClientRect();
+        if (rect) setTrackMenu({ left: rect.left, top: rect.bottom });
+      }}>
+        <ToolButton icon="addTrack" label={t("新建轨道")} active={Boolean(trackMenu)} onClick={() => undefined} />
+        {trackMenu && <div className="toolbar-popover track-menu" style={trackMenu} onClick={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()}>
+          <button onClick={() => addTrack("add-video-track")}><Icon name="image" size={14} />{t("新建视频轨（画中画）")}</button>
+          <button onClick={() => addTrack("add-audio-track")}><Icon name="music" size={14} />{t("新建音频轨")}</button>
+        </div>}
+      </div>
       <ToolButton icon="marker" label={t("添加标记 M")} onClick={() => onAction("marker")} />
       <ToolButton icon="freeze" label={t("定格 3 秒")} disabled={!selectionIsVideo} onClick={() => onAction("freeze")} />
       <ToolButton icon="reverse" label={t("倒放")} disabled={!selectionIsVideo} onClick={() => onAction("reverse")} />
@@ -174,14 +195,15 @@ type TimelineProps = {
   onTrimClip: (clipId: string, patch: Partial<Clip>) => void;
   onBlade: (clipId: string, time: number) => void;
   onTrack: (trackId: string, patch: Partial<Track>) => void;
+  onRemoveTrack: (trackId: string) => void;
   onRemoveMarker: (id: string) => void;
   onZoom: (zoom: number) => void;
   onCover: () => void;
   onViewport: (width: number) => void;
   onTransition: (clipId: string) => void;
   subtitleMode: SubtitleMode;
-  selectedSubtitle: number | null;
-  onSelectSubtitle: (id: number | null) => void;
+  selectedSubtitles: number[];
+  onSelectSubtitle: (id: number | null, additive?: boolean) => void;
   onSubtitleChange: (id: number, patch: Partial<Pick<Subtitle, "start" | "end" | "zh" | "en">>) => void;
   onAddSubtitle: (time: number) => number;
   onVolume: (clipId: string, volume: number) => void;
@@ -489,7 +511,9 @@ export function Timeline(props: TimelineProps) {
   function startCaptionPointer(event: ReactPointerEvent, subtitle: Subtitle) {
     if (event.button !== 0 || editingCaption === subtitle.id) return;
     event.stopPropagation();
-    props.onSelectSubtitle(subtitle.id);
+    const additive = event.shiftKey || event.metaKey || event.ctrlKey;
+    props.onSelectSubtitle(subtitle.id, additive);
+    if (additive) return;
     const edge = (event.target as HTMLElement).dataset.edge as "left" | "right" | undefined;
     if (!edge) props.onSeek(subtitle.start + 0.01);
     beginDrag({ type: "caption", id: subtitle.id, edge: edge ?? null, pointerX: event.clientX, start: subtitle.start, end: subtitle.end, moved: false });
@@ -509,7 +533,7 @@ export function Timeline(props: TimelineProps) {
           const end = dragged ? dragged.end : subtitle.end;
           const width = Math.max(3, (end - start) * zoom);
           const field = lang;
-          const selected = props.selectedSubtitle === subtitle.id;
+          const selected = props.selectedSubtitles.includes(subtitle.id);
           return <div key={subtitle.id} className={`timeline-caption${selected ? " selected" : ""}${time >= subtitle.start && time < subtitle.end ? " live" : ""}`} style={{ left: start * zoom, width }} title={`${subtitle.zh}${subtitle.zh && subtitle.en ? "\n" : ""}${subtitle.en}\n${t("双击编辑 · 拖动调整时间")}`}
             onPointerDown={(event) => startCaptionPointer(event, subtitle)}
             onDoubleClick={(event) => { event.stopPropagation(); setEditingCaption(subtitle.id); }}>
@@ -566,6 +590,7 @@ export function Timeline(props: TimelineProps) {
               <button title={track.locked ? t("解锁轨道") : t("锁定轨道")} className={track.locked ? "on" : ""} onClick={() => props.onTrack(track.id, { locked: !track.locked })}><Icon name={track.locked ? "lock" : "unlock"} size={12} /></button>
               {track.kind === "video" && <button title={track.hidden ? t("显示轨道") : t("隐藏轨道")} className={track.hidden ? "on" : ""} onClick={() => props.onTrack(track.id, { hidden: !track.hidden })}><Icon name={track.hidden ? "eyeOff" : "eye"} size={12} /></button>}
               <button title={track.muted ? t("取消静音") : t("静音轨道")} className={track.muted ? "on" : ""} onClick={() => props.onTrack(track.id, { muted: !track.muted })}><Icon name={track.muted ? "mute" : "volume"} size={12} /></button>
+              {track.keep && !project.clips.some((clip) => clip.trackId === track.id) && <button title={t("删除空轨道")} onClick={() => props.onRemoveTrack(track.id)}><Icon name="close" size={12} /></button>}
             </span>
           </div>
           <i className="track-lead" onDragOver={(event) => { if (track.main) onLaneDragOver(event, track.id, 0); }} onDrop={(event) => { if (track.main) onLaneDrop(event, track.id, 0); }}>{track.main && <button className="cover-button" onClick={props.onCover} title={t("编辑封面")} style={coverImage ? { backgroundImage: `url("${coverImage}")` } : undefined}><span>{t("封面")}</span></button>}</i>

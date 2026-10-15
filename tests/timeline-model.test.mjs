@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  addTrack, clipDuration, clipEnd, createClip, createProject, deleteClips, evaluateVisual, freezeFrame, mainTrack, placeClip,
+  addTrack, clipDuration, clipEnd, createClip, createProject, deleteClips, evaluateVisual, freezeFrame, mainTrack, placeClip, pruneTracks,
   replaceWithRanges, sourceRangeToTimeline, sourceTimeAt, splitAtSourceTimes, splitClip, toComposition, trackClips, trimAt, updateClip,
 } from "../app/editor/model.ts";
 
@@ -141,4 +141,13 @@ test("linkage ripples only attachments after the edited part of the main clip", 
   const trimmed = trimAt(project, a.id, 1, "left", on);
   near(trimmed.clips.find((clip) => clip.assetId === "inside").start, 1);
   near(trimmed.clips.find((clip) => clip.assetId === "after").start, 6);
+});
+
+test("pruning drops empty overlay tracks but keeps ones added by hand", () => {
+  const auto = addTrack(createProject(), "video", "top");
+  const manual = addTrack(auto.project, "video", "top");
+  const project = { ...manual.project, tracks: manual.project.tracks.map((track) => track.id === manual.trackId ? { ...track, keep: true } : track) };
+  const ids = pruneTracks(project).tracks.map((track) => track.id);
+  assert.ok(ids.includes(manual.trackId));
+  assert.ok(!ids.includes(auto.trackId));
 });

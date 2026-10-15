@@ -16,6 +16,8 @@ const eslintConfig = defineConfig([
     "public/vendor/**",
     ".claude/**",
     "release/**",
+    "local-runtime/**",
+    "media-runtime/**",
   ]),
 ]);
 

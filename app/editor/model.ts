@@ -21,7 +21,7 @@ export type Asset = {
   peaksPerSecond: number;
 };
 
-export type Track = { id: string; kind: "video" | "audio"; main: boolean; muted: boolean; hidden: boolean; locked: boolean };
+export type Track = { id: string; kind: "video" | "audio"; main: boolean; muted: boolean; hidden: boolean; locked: boolean; /** Added by hand, so it stays even while empty. */ keep?: boolean };
 
 export type Clip = {
   id: string;
@@ -383,7 +383,7 @@ export function normalizeTrackOrder(tracks: Track[]) {
 export function pruneTracks(project: Project): Project {
   const used = new Set(project.clips.map((clip) => clip.trackId));
   const firstAudio = project.tracks.find((track) => track.kind === "audio");
-  const tracks = project.tracks.filter((track) => track.main || track === firstAudio || used.has(track.id));
+  const tracks = project.tracks.filter((track) => track.main || track.keep || track === firstAudio || used.has(track.id));
   return tracks.length === project.tracks.length ? project : { ...project, tracks };
 }
 

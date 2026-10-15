@@ -338,6 +338,15 @@ const en: Record<string, string> = {
   "已复制 {count} 个素材；在素材库粘贴会复制一份，在时间轴粘贴会放到播放头处": "Copied {count} items. Paste in the library to duplicate them, or on the timeline to place them at the playhead",
   "已粘贴 {count} 个素材": "Pasted {count} items",
   "拖动播放头预览任意时间": "Drag the playhead to preview any moment",
+  "新建轨道": "Add track",
+  "新建视频轨（画中画）": "Video track (overlay)",
+  "新建音频轨": "Audio track",
+  "删除空轨道": "Remove empty track",
+  "已新建视频轨，可把素材拖进去叠加": "Video track added — drag media onto it to overlay",
+  "已新建音频轨": "Audio track added",
+  "已删除 {count} 条字幕": "Deleted {count} captions",
+  "已选中全部 {count} 条字幕，按 ⌫ 删除": "Selected all {count} captions — press ⌫ to delete",
+  "还没有字幕": "No captions yet",
 };
 
 export default en;

@@ -99,7 +99,7 @@ export default function Home() {
   // Library clipboard and which area (library or timeline) keyboard shortcuts act on.
   const assetClipboard = useRef<{ assets: Asset[]; cut: boolean }>({ assets: [], cut: false });
   const lastClipboard = useRef<"clips" | "assets">("clips");
-  const focusZone = useRef<"library" | "timeline">("timeline");
+  const focusZone = useRef<"library" | "timeline" | "captions">("timeline");
   const [selectedAssets, setSelectedAssets] = useState<string[]>([]);
   const [hoverTime, setHoverTime] = useState<number | null>(null);
   const [muted, setMuted] = useState(false);
@@ -153,7 +153,9 @@ export default function Home() {
   const [aiKeyLoaded, setAiKeyLoaded] = useState(false);
   const [showAiKey, setShowAiKey] = useState(false);
   const [captionProgress, setCaptionProgress] = useState<{ progress: number; stage: string } | null>(null);
-  const [selectedSubtitle, setSelectedSubtitle] = useState<number | null>(null);
+  const [selectedSubtitles, setSelectedSubtitles] = useState<number[]>([]);
+  const selectedSubtitle = selectedSubtitles.length ? selectedSubtitles[selectedSubtitles.length - 1] : null;
+  const setSelectedSubtitle = (id: number | null) => setSelectedSubtitles(id === null ? [] : [id]);
   const [separationReady, setSeparationReady] = useState<{ runtime: boolean; model: boolean }>({ runtime: false, model: false });
   const [separating, setSeparating] = useState<string | null>(null);
   const [stemUrls, setStemUrls] = useState<Map<string, string>>(() => new Map());
@@ -745,8 +747,10 @@ export default function Home() {
         return;
       }
       case "delete":
-        if (!selectedClips.length && selectedSubtitle !== null) {
-          setSubtitles(project.subtitles.filter((item) => item.id !== selectedSubtitle));
+        if (!selectedClips.length && selectedSubtitles.length) {
+          const removed = new Set(selectedSubtitles);
+          setSubtitles(project.subtitles.filter((item) => !removed.has(item.id)));
+          if (removed.size > 1) setToast(t("已删除 {count} 条字幕", { count: removed.size }));
           return setSelectedSubtitle(null);
         }
         if (!selectedClips.length) return;
@@ -776,6 +780,13 @@ export default function Home() {
       case "smart-talk": return void smartTalk();
       case "smart-scenes": return void smartScenes();
       case "record": return void toggleRecording();
+      case "add-video-track":
+      case "add-audio-track": {
+        const kind = action === "add-video-track" ? "video" : "audio";
+        const created = addTrack(project, kind, kind === "video" ? "top" : "bottom");
+        commit({ ...created.project, tracks: created.project.tracks.map((track) => track.id === created.trackId ? { ...track, keep: true } : track) });
+        return setToast(kind === "video" ? t("已新建视频轨，可把素材拖进去叠加") : t("已新建音频轨"));
+      }
       case "fit": return setZoom(clampZoom(viewportWidth / Math.max(duration * 1.05, 5)));
     }
   }
@@ -784,6 +795,12 @@ export default function Home() {
   useEffect(() => { actionRef.current = runAction; });
   const clipboardCommand = (command: "copy" | "cut" | "paste" | "duplicate" | "select-all") => {
     if (focusZone.current === "library") return libraryCommand(command);
+    // After clicking a caption lane (or with no clips at all), select-all picks every caption so they can be deleted together.
+    if (command === "select-all" && (focusZone.current === "captions" || (!project.clips.length && project.subtitles.length))) {
+      setSelection([]);
+      setSelectedSubtitles(project.subtitles.map((item) => item.id));
+      return setToast(project.subtitles.length ? t("已选中全部 {count} 条字幕，按 ⌫ 删除", { count: project.subtitles.length }) : t("还没有字幕"));
+    }
     if (command === "select-all") return setSelection(project.clips.filter((clip) => !project.tracks.find((track) => track.id === clip.trackId)?.locked).map((clip) => clip.id));
     if (command === "copy" || command === "cut") {
       if (copySelection(command === "cut")) lastClipboard.current = "clips";
@@ -1831,16 +1848,22 @@ export default function Home() {
             onSeparate={(mode) => void separateSelected(mode)} onTranslate={() => setTranslateOpen(true)} />}
     </section>
 
-    <section className="timeline-area" onPointerDownCapture={() => { focusZone.current = "timeline"; }}>
-      <TimelineToolbar mode={mode} onMode={setMode} canUndo={history.past.length > 0} canRedo={history.future.length > 0} hasSelection={selectedClips.length > 0} selectionIsVideo={primaryAsset?.kind === "video" && primaryClip?.freezeAt === null} recording={recording} toggles={toggles} zoom={zoom} settings={timelineSettings}
+    <section className="timeline-area" onPointerDownCapture={(event) => { focusZone.current = (event.target as HTMLElement).closest(".caption-track") ? "captions" : "timeline"; }}>
+      <TimelineToolbar mode={mode} onMode={setMode} canUndo={history.past.length > 0} canRedo={history.future.length > 0} hasSelection={selectedClips.length > 0} canDelete={selectedClips.length > 0 || selectedSubtitles.length > 0} selectionIsVideo={primaryAsset?.kind === "video" && primaryClip?.freezeAt === null} recording={recording} toggles={toggles} zoom={zoom} settings={timelineSettings}
         onAction={runAction} onToggle={(key) => setToggles((value) => ({ ...value, [key]: !value[key] }))} onZoom={(value) => setZoom(clampZoom(value))} onSettings={setTimelineSettings} />
       <Timeline project={project} assets={assetMap} time={current} hoverTime={hoverTime} duration={duration} selection={selection} mode={mode} toggles={toggles} zoom={zoom} settings={timelineSettings} coverImage={coverImage || mainThumb} fps={exportFps} onTransition={(clipId) => { setSelection([clipId]); setInspectorTab("animation"); setAgentOpen(false); }} draggingAssetId={draggingAssetId}
-        onSeek={seek} onHover={setHoverTime} onSelect={setSelection} onDropAsset={dropAsset} onMoveClip={moveClip} onTrimClip={trimClip} onBlade={bladeSplit}
+        onSeek={seek} onHover={setHoverTime} onSelect={(ids) => { setSelection(ids); if (ids.length) setSelectedSubtitles([]); }} onDropAsset={dropAsset} onMoveClip={moveClip} onTrimClip={trimClip} onBlade={bladeSplit}
+        onRemoveTrack={(trackId) => commit((state) => state.clips.some((clip) => clip.trackId === trackId) ? state : { ...state, tracks: state.tracks.filter((track) => track.id !== trackId) })}
         onTrack={(trackId, patch) => commit((state) => ({ ...state, tracks: state.tracks.map((track) => track.id === trackId ? { ...track, ...patch } : track) }))}
         onRemoveMarker={(id) => commit((state) => ({ ...state, markers: state.markers.filter((marker) => marker.id !== id) }))}
         onZoom={(value) => setZoom(clampZoom(value))} onCover={() => setCoverOpen(true)} onViewport={setViewportWidth}
-        subtitleMode={subtitleMode} selectedSubtitle={selectedSubtitle}
-        onSelectSubtitle={(id) => { setSelectedSubtitle(id); if (id !== null) setLeftTab("subtitles"); }}
+        subtitleMode={subtitleMode} selectedSubtitles={selectedSubtitles}
+        onSelectSubtitle={(id, additive) => {
+          if (id !== null) setSelection([]);
+          if (id !== null && additive) setSelectedSubtitles((ids) => ids.includes(id) ? ids.filter((item) => item !== id) : [...ids, id]);
+          else setSelectedSubtitle(id);
+          if (id !== null) setLeftTab("subtitles");
+        }}
         onVolume={(clipId, volume) => {
           const clip = project.clips.find((item) => item.id === clipId);
           if (!clip) return;

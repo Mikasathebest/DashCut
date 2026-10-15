@@ -1,6 +1,8 @@
 // Minimal stroke icon set (24×24 viewBox) so the toolbar does not depend on an icon font.
 const paths: Record<string, string> = {
   plus: "M12 5v14M5 12h14",
+  addTrack: "M3 6h12M3 12h12M3 18h8M18 14v8M14 18h8",
+  close: "M6 6l12 12M18 6L6 18",
   text: "M5 6V4h14v2M12 4v16M9 20h6",
   minus: "M5 12h14",
   pointer: "M6 3l12 9-5.5 1.2L15 20l-2.6 1-2.4-6.6L6 18z",
