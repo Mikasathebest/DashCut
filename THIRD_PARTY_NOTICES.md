@@ -28,6 +28,10 @@ The FFmpeg runtime uses libass for styled ASS subtitle rendering. Release builds
 
 Local captions use faster-whisper, CTranslate2, PyAV, and model files selected by the user. Their license files and model terms remain applicable. Model weights are downloaded only after explicit user action and are not included in DashCut installers.
 
+## Voice and background separation
+
+The optional separation runtime bundles Demucs 4.1.0 (MIT), PyTorch 2.11.0 (BSD-3-Clause; includes LLVM OpenMP under Apache-2.0 WITH LLVM-exception), NumPy (BSD-3-Clause and others), einops, julius, PyYAML and filelock (MIT), fsspec, Jinja2, MarkupSafe, networkx (BSD-3-Clause), mpmath and sympy (BSD), tqdm (MPL-2.0 AND MIT), typing_extensions (PSF-2.0), packaging (Apache-2.0 OR BSD-2-Clause) and the CPython 3.11 runtime (PSF-2.0) with its libraries. It is frozen with PyInstaller, whose bootloader is distributed under the GPL-2.0-or-later bootloader exception. The HTDemucs model weights (facebookresearch/demucs, MIT) are downloaded on first use and are not included in installers.
+
 ## Smart reframe (face detection)
 
 Smart 16:9 → 9:16 reframing detects faces locally with MediaPipe Tasks Vision and the BlazeFace short-range face detector. Video frames never leave the computer.

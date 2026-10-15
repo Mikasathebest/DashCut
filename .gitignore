@@ -45,6 +45,9 @@ next-env.d.ts
 /media-runtime/current/
 /.ffmpeg-build/
 /.runtime-venv/
+/.separation-venv/
+/.pyinstaller-separate/
+/local-runtime/dashcut-separate/
 /.wrangler/
 /outputs/
 /work/
