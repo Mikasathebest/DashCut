@@ -191,6 +191,11 @@ declare global {
       saveRecording(bytes: ArrayBuffer): Promise<string>;
       requestMicrophone(): Promise<boolean>;
       registerMedia(paths: string[]): Promise<string[]>;
+      separationStatus(): Promise<{ ready: boolean; message?: string; runtime: { ready: boolean; kind: string }; model: { installed: boolean; sizeBytes: number } }>;
+      installSeparation(): Promise<unknown>;
+      separateAudio(input: string): Promise<{ vocals: string; background: string; duration: number; cached: boolean }>;
+      dubVoices(): Promise<Array<{ id: string; name: string; language: string }>>;
+      renderDub(request: { lines: Array<{ start: number; end: number; text: string }>; voice?: string; language: string }): Promise<{ outputPath: string; duration: number; voice: string; lines: Array<{ start: number; end: number; spoken: number; speedup: number; overflow: number }> }>;
       writeExportLayer(bytes: ArrayBuffer): Promise<string>;
       faceModel(): Promise<ArrayBuffer>;
       analyzeComposition(request: CompositionRequest): Promise<CompositionAnalysis>;

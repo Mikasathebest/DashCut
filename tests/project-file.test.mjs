@@ -114,3 +114,12 @@ test("atomic writes leave no temp files; recent list and autosave recovery behav
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("transcripts and separation stems survive a save and reopen", async () => {
+  const state = sampleState("/work");
+  const words = [{ start: 0, end: 0.5, text: "你好", prob: 0.9 }];
+  state.project = { ...state.project, transcripts: { "asset-1": { language: "zh", source: "local", words, sentences: [{ start: 0, end: 0.5 }] } }, stems: { "asset-1": { voice: "/cache/v.wav", background: "/cache/b.wav" } } };
+  const restored = readDocument(migrateDocument(JSON.parse(JSON.stringify(buildDocument(state)))), (file) => file);
+  assert.deepEqual(restored.project.transcripts, state.project.transcripts);
+  assert.deepEqual(restored.project.stems, state.project.stems);
+});

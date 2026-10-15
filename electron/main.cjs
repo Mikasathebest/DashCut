@@ -14,6 +14,8 @@ const { handleMediaScheme, registerMediaScheme } = require("./media-protocol.cjs
 const { createAgentHost } = require("./agent-host.cjs");
 const { createKeyStore } = require("./agent-keys.cjs");
 const { setLanguage, tr } = require("./i18n.cjs");
+const { listVoices, renderDub } = require("./dubbing.cjs");
+const { getSeparationStatus, installSeparationModel, separateAudio } = require("./separation.cjs");
 const { createAutosave, createRecentList, findSiblings, loadProject, saveProject } = require("./project-store.cjs");
 
 registerMediaScheme(protocol);
@@ -125,6 +127,26 @@ ipcMain.handle("export:composition", async (event, request) => {
     onProgress: (progress) => event.sender.send("export:progress", progress),
   });
 });
+function separationOptions() {
+  const executable = process.platform === "win32" ? "dashcut-separate.exe" : "dashcut-separate";
+  return {
+    isPackaged: app.isPackaged,
+    modelsPath: path.join(app.getPath("userData"), "models"),
+    bundledSeparatorPath: app.isPackaged ? path.join(process.resourcesPath, "local-runtime", "dashcut-separate", executable) : undefined,
+  };
+}
+const separationProgress = (event) => ({ progress, stage }) => captionProgress(event)({ progress, stage: tr(stage) });
+ipcMain.handle("separation:status", () => getSeparationStatus(separationOptions()));
+ipcMain.handle("separation:install", (event) => installSeparationModel(separationOptions(), separationProgress(event)));
+ipcMain.handle("separation:run", (event, input) => separateAudio({
+  input, cacheDir: path.join(app.getPath("userData"), "stems"), ffmpegPath: mediaRuntimePath(),
+}, separationOptions(), separationProgress(event)));
+ipcMain.handle("dub:voices", () => listVoices());
+ipcMain.handle("dub:render", (event, request) => renderDub({
+  lines: request?.lines, voice: request?.voice, language: request?.language,
+  outputPath: path.join(app.getPath("userData"), "dubs", `dub-${Date.now()}.wav`),
+  tempPath: app.getPath("temp"), ffmpegPath: mediaRuntimePath(), onProgress: (progress) => captionProgress(event)({ progress, stage: tr("正在合成配音…") }),
+}));
 ipcMain.handle("media:waveform", (_event, source) => extractWaveform(source, { ffmpegPath: mediaRuntimePath() }));
 ipcMain.handle("smart:scenes", (_event, source, range) => detectScenes(source, { ...range, ffmpegPath: mediaRuntimePath() }));
 ipcMain.handle("smart:speech", (_event, source, range) => detectSpeechSegments(source, { ...range, ffmpegPath: mediaRuntimePath() }));
@@ -251,7 +273,7 @@ function buildMenu() {
       { label: tr("复制"), accelerator: "CmdOrCtrl+C", click: () => sendCommand("copy") },
       { label: tr("粘贴"), accelerator: "CmdOrCtrl+V", click: () => sendCommand("paste") },
       { label: tr("复制并粘贴"), accelerator: "CmdOrCtrl+D", click: () => sendCommand("duplicate") },
-      { role: "selectAll" },
+      { label: tr("全选"), accelerator: "CmdOrCtrl+A", click: () => sendCommand("select-all") },
     ] },
     { role: "viewMenu" },
     { role: "windowMenu" },

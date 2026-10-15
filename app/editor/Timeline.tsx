@@ -149,6 +149,7 @@ type DragState =
   | { type: "trim"; clipId: string; edge: "left" | "right"; pointerX: number; patch: Partial<Clip> }
   | { type: "scrub" }
   | { type: "marquee"; x0: number; y0: number; x1: number; y1: number; additive: boolean }
+  | { type: "volume"; clipId: string; pointerY: number; origin: number; laneHeight: number; volume: number }
   | { type: "caption"; id: number; edge: "left" | "right" | null; pointerX: number; start: number; end: number; moved: boolean };
 
 type TimelineProps = {
@@ -182,6 +183,8 @@ type TimelineProps = {
   selectedSubtitle: number | null;
   onSelectSubtitle: (id: number | null) => void;
   onSubtitleChange: (id: number, patch: Partial<Pick<Subtitle, "start" | "end" | "zh" | "en">>) => void;
+  onAddSubtitle: (time: number) => number;
+  onVolume: (clipId: string, volume: number) => void;
 };
 
 export function Timeline(props: TimelineProps) {
@@ -255,6 +258,8 @@ export function Timeline(props: TimelineProps) {
       if (!state) return;
       if (state.type === "scrub") return propsRef.current.onSeek(timeFromClientX(event.clientX));
       if (state.type === "marquee") return update({ ...state, x1: event.clientX, y1: event.clientY });
+      // Dragging the volume line: the lane's full height spans 0–200%.
+      if (state.type === "volume") return update({ ...state, volume: Math.max(0, Math.min(2, state.origin + ((state.pointerY - event.clientY) / state.laneHeight) * 2)) });
       if (state.type === "caption") return update(dragCaption(state, event.clientX));
       const clip = project.clips.find((item) => item.id === state.clipId);
       if (!clip) return;
@@ -305,6 +310,10 @@ export function Timeline(props: TimelineProps) {
       dragRef.current = null;
       setDrag(null);
       if (!state || state.type === "scrub") return;
+      if (state.type === "volume") {
+        if (Math.abs(state.volume - state.origin) > 0.005) propsRef.current.onVolume(state.clipId, Number(state.volume.toFixed(2)));
+        return;
+      }
       if (state.type === "marquee") {
         const moved = Math.abs(state.x1 - state.x0) > 4 || Math.abs(state.y1 - state.y0) > 4;
         if (!moved) {
@@ -347,7 +356,14 @@ export function Timeline(props: TimelineProps) {
     else beginDrag({ type: "move", clipId: clip.id, pointerX: event.clientX, originStart: clip.start, start: clip.start, target: clip.trackId, moved: false });
   }
 
-  function onLaneDragOver(event: React.DragEvent, target: DropTarget) {
+  /** Where a drop at `time` lands on the magnetic main track (same midpoint rule as placeClip). */
+  function mainInsertTime(time: number) {
+    const mainClips = trackClips(project, project.tracks.find((track) => track.main)!.id);
+    const before = mainClips.find((clip) => time < clip.start + clipDuration(clip) / 2);
+    return before ? before.start : mainClips.reduce((end, clip) => Math.max(end, clipEnd(clip)), 0);
+  }
+
+  function onLaneDragOver(event: React.DragEvent, target: DropTarget, at?: number) {
     if (!draggingAssetId) return;
     const asset = assets.get(draggingAssetId);
     const wantKind = asset?.kind === "audio" ? "audio" : "video";
@@ -355,18 +371,64 @@ export function Timeline(props: TimelineProps) {
     if (project.tracks.find((track) => track.id === target)?.locked) return;
     event.preventDefault();
     event.dataTransfer.dropEffect = "copy";
-    setAssetDrop({ target, start: snapped(timeFromClientX(event.clientX)) });
+    setAssetDrop({ target, start: at ?? snapped(timeFromClientX(event.clientX)) });
   }
 
-  function onLaneDrop(event: React.DragEvent, target: DropTarget) {
+  function onLaneDrop(event: React.DragEvent, target: DropTarget, at?: number) {
     event.preventDefault();
     const assetId = event.dataTransfer.getData("application/x-dashcut-asset") || draggingAssetId;
     setAssetDrop(null);
-    if (assetId) props.onDropAsset(assetId, target, snapped(timeFromClientX(event.clientX)));
+    if (assetId) props.onDropAsset(assetId, target, at ?? snapped(timeFromClientX(event.clientX)));
   }
 
   const ghostAsset = draggingAssetId ? assets.get(draggingAssetId) : undefined;
   const rows = project.tracks;
+
+  /** Horizontal volume line over a waveform; drag it up or down (0–200%). */
+  function volumeLine(clip: Clip, laneHeight: number) {
+    const dragging = drag?.type === "volume" && drag.clipId === clip.id ? drag : null;
+    const volume = dragging ? dragging.volume : clip.audio.volume;
+    const top = laneHeight * (1 - volume / 2);
+    return <div className={`volume-line${dragging ? " dragging" : ""}${clip.audio.muted ? " muted" : ""}`} style={{ top }}
+      title={t("上下拖动调节音量：{percent}%", { percent: Math.round(volume * 100) })}
+      onPointerDown={(event) => {
+        if (event.button !== 0) return;
+        event.stopPropagation();
+        beginDrag({ type: "volume", clipId: clip.id, pointerY: event.clientY, origin: clip.audio.volume, laneHeight, volume: clip.audio.volume });
+      }}><span>{Math.round(volume * 100)}%</span></div>;
+  }
+
+  /** The original sound of video clips, drawn in its own lane under the video track. */
+  function sourceAudioRow(track: Track) {
+    const clips = project.clips.filter((clip) => {
+      const asset = assets.get(clip.assetId);
+      return clip.trackId === track.id && asset?.kind === "video" && asset.hasAudio && clip.freezeAt === null;
+    });
+    if (!clips.length) return null;
+    const height = Math.max(28, settings.audioHeight);
+    return <div key={`${track.id}-audio`} className={`timeline-row source-audio${track.muted ? " muted-track" : ""}`} style={{ height }}>
+      <div className="track-header">
+        <span className="track-name"><Icon name="volume" size={12} />{t("原声")}</span>
+        <span className="track-actions"><button title={track.muted ? t("取消静音") : t("静音原声")} className={track.muted ? "on" : ""} onClick={() => props.onTrack(track.id, { muted: !track.muted })}><Icon name={track.muted ? "mute" : "volume"} size={12} /></button></span>
+      </div>
+      <i className="track-lead" />
+      <div className="track-lane" style={{ width: contentWidth }} onPointerDown={(event) => { if (event.button !== 0) return; props.onSelect([]); props.onSeek(timeFromClientX(event.clientX)); }}>
+        {clips.map((clip) => {
+          const asset = assets.get(clip.assetId)!;
+          const preview = drag && "clipId" in drag && drag.clipId === clip.id && drag.type !== "volume" ? drag : null;
+          const shown = preview?.type === "trim" ? { ...clip, ...preview.patch } : clip;
+          const left = (preview?.type === "move" && preview.moved ? preview.start : shown.start) * zoom;
+          const width = Math.max(4, clipDuration(shown) * zoom);
+          return <div key={clip.id} className={`source-audio-clip${selection.includes(clip.id) ? " selected" : ""}${clip.audio.muted ? " muted" : ""}`} style={{ left, width, height: height - 4 }}
+            onPointerDown={(event) => { event.stopPropagation(); props.onSelect([clip.id]); }}>
+            <Waveform asset={asset} clip={shown} width={width} height={height - 4} />
+            {clip.audio.separation && clip.audio.separation !== "none" && <em className="separation-badge">{clip.audio.separation === "voice" ? t("仅人声") : t("仅背景")}</em>}
+            {volumeLine(clip, height - 4)}
+          </div>;
+        })}
+      </div>
+    </div>;
+  }
 
   function renderClip(clip: Clip, track: Track, height: number) {
     const asset = assets.get(clip.assetId);
@@ -377,7 +439,8 @@ export function Timeline(props: TimelineProps) {
     const left = (moving ? preview.start : shown.start) * zoom;
     const width = Math.max(4, clipDuration(shown) * zoom);
     const isAudio = asset.kind === "audio";
-    const waveHeight = isAudio ? height - 14 : asset.hasAudio && shown.freezeAt === null ? Math.round((height - 2) * settings.waveformRatio) : 0;
+    // Video sound now has its own lane below the track, so only audio clips draw a waveform here.
+    const waveHeight = isAudio ? height - 14 : 0;
     const style: CSSProperties = { left, width, height: height - 4 };
     // Keyframe positions of every animated property, shown as diamonds on the clip.
     const keyTimes = [...new Set([...Object.values(shown.keyframes ?? {}), shown.audio.volumeKeyframes].flatMap((points) => points?.map((point) => Math.round(point.time * 100) / 100) ?? []))].filter((time) => time >= 0 && time <= clipDuration(shown));
@@ -385,6 +448,7 @@ export function Timeline(props: TimelineProps) {
     return <div key={clip.id} data-clip-id={clip.id} className={`timeline-clip ${isAudio ? "audio" : asset.kind}${selection.includes(clip.id) ? " selected" : ""}${moving ? " moving" : ""}${mode === "blade" ? " blade" : ""}`} style={style} onPointerDown={(event) => startClipPointer(event, clip, track)}>
       {isText ? <div className="clip-text" style={{ height: height - 4 }}>T</div> : !isAudio && <Filmstrip asset={asset} clip={shown} width={width} height={height - 4 - waveHeight} />}
       {waveHeight > 0 && <div className="clip-wave" style={{ height: waveHeight }}><Waveform asset={asset} clip={shown} width={width} height={waveHeight} /></div>}
+      {isAudio && volumeLine(clip, height - 4)}
       <span className="clip-label">{shown.freezeAt !== null && <em>{t("定格")}</em>}{shown.reverse && <em>{t("倒放")}</em>}{shown.speedCurve ? <em>{t("曲线变速")}</em> : shown.speed !== 1 && <em>{shown.speed}×</em>}{shown.audio.muted && <em>{t("静音")}</em>}{isText ? (shown.text?.content.split("\n")[0] || t("文本")) : asset.name.replace(/\.[^.]+$/, "")}<small>{clipDuration(shown).toFixed(1)}s</small></span>
       {keyTimes.map((time) => <i key={time} className="clip-keyframe" style={{ left: time * zoom }} />)}
       {!track.locked && <><i className="clip-edge left" data-edge="left" /><i className="clip-edge right" data-edge="right" /></>}
@@ -430,7 +494,8 @@ export function Timeline(props: TimelineProps) {
     return <div key={lang} className={`timeline-row caption-track ${lang}${dimmed ? " dimmed" : ""}`} style={{ height: 30 }} title={dimmed ? t("当前预览与导出未显示此语言") : undefined}>
       <div className="track-header"><span className="track-name"><Icon name="text" size={12} />{lang === "zh" ? t("中文字幕") : "English"}</span></div>
       <i className="track-lead" />
-      <div className="track-lane" style={{ width: contentWidth }} onPointerDown={(event) => { if (event.button !== 0) return; props.onSelectSubtitle(null); props.onSeek(timeFromClientX(event.clientX)); }}>
+      <div className="track-lane" style={{ width: contentWidth }} onPointerDown={(event) => { if (event.button !== 0) return; props.onSelectSubtitle(null); props.onSeek(timeFromClientX(event.clientX)); }}
+        onDoubleClick={(event) => { if (event.target !== event.currentTarget) return; setEditingCaption(props.onAddSubtitle(timeFromClientX(event.clientX))); }}>
         {subtitles.map((subtitle) => {
           const dragged = drag?.type === "caption" && drag.id === subtitle.id ? drag : null;
           const start = dragged ? dragged.start : subtitle.start;
@@ -496,17 +561,20 @@ export function Timeline(props: TimelineProps) {
               <button title={track.muted ? t("取消静音") : t("静音轨道")} className={track.muted ? "on" : ""} onClick={() => props.onTrack(track.id, { muted: !track.muted })}><Icon name={track.muted ? "mute" : "volume"} size={12} /></button>
             </span>
           </div>
-          <i className="track-lead">{track.main && <button className="cover-button" onClick={props.onCover} title={t("编辑封面")} style={coverImage ? { backgroundImage: `url("${coverImage}")` } : undefined}><span>{t("封面")}</span></button>}</i>
+          <i className="track-lead" onDragOver={(event) => { if (track.main) onLaneDragOver(event, track.id, 0); }} onDrop={(event) => { if (track.main) onLaneDrop(event, track.id, 0); }}>{track.main && <button className="cover-button" onClick={props.onCover} title={t("编辑封面")} style={coverImage ? { backgroundImage: `url("${coverImage}")` } : undefined}><span>{t("封面")}</span></button>}</i>
           <div className="track-lane" style={{ width: contentWidth }} onPointerDown={(event) => { if (event.button !== 0) return; beginDrag({ type: "marquee", x0: event.clientX, y0: event.clientY, x1: event.clientX, y1: event.clientY, additive: event.shiftKey || event.metaKey }); }} onDragOver={(event) => onLaneDragOver(event, track.id)} onDragLeave={() => setAssetDrop(null)} onDrop={(event) => onLaneDrop(event, track.id)}>
             {track.main && trackClips(project, track.id).flatMap((clip, index, list) => clip.transitionOut && list[index + 1] && Math.abs(clipEnd(clip) - list[index + 1].start) < 0.01
               ? [<button key={`transition-${clip.id}`} className="clip-transition" style={{ left: clipEnd(clip) * zoom }} title={t("转场：{duration}s，点击编辑", { duration: clip.transitionOut.duration.toFixed(1) })} onPointerDown={(event) => event.stopPropagation()} onClick={() => props.onTransition(clip.id)}>⧉</button>] : [])}
             {project.clips.filter((clip) => clip.trackId === track.id && !(drag?.type === "move" && drag.moved && drag.clipId === clip.id && drag.target !== track.id)).map((clip) => renderClip(clip, track, height))}
             {movingClip && movingTarget === track.id && movingClip.trackId !== track.id && renderClip(movingClip, track, height)}
-            {assetDrop?.target === track.id && ghostLength > 0 && <i className="drop-ghost" style={{ left: assetDrop.start * zoom, width: ghostLength * zoom }} />}
+            {assetDrop?.target === track.id && ghostLength > 0 && (track.main && toggles.magnet
+              // On the magnetic main track the clip is inserted at a cut, so show exactly which one.
+              ? <i className="insert-caret" style={{ left: mainInsertTime(assetDrop.start) * zoom }}><span>{mainInsertTime(assetDrop.start) === 0 ? t("插到最前面") : t("插入到这里")}</span></i>
+              : <i className="drop-ghost" style={{ left: assetDrop.start * zoom, width: ghostLength * zoom }} />)}
             {!project.clips.some((clip) => clip.trackId === track.id) && track.main && !assetDrop && <span className="lane-hint">{t("从左侧素材库拖入视频或图片")}</span>}
           </div>
         </div>;
-      })}
+      }).flatMap((row, index) => rows[index].kind === "video" ? [row, sourceAudioRow(rows[index])] : [row])}
       {captionRow("zh")}
       {captionRow("en")}
       {newZone("new-bottom")}

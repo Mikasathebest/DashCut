@@ -35,10 +35,15 @@ const visualEffects: Array<{ id: VisualEffect; label: string; note: string }> = 
   { id: "blur", label: "模糊", note: "高斯模糊" },
 ];
 const audioEffects: Array<{ id: AudioEffect; label: string; note: string }> = [
-  { id: "denoise", label: "智能降噪", note: "抑制底噪与嘶声" },
+  { id: "denoise", label: "音频降噪", note: "抑制底噪与嘶声" },
+  { id: "voice-beautify", label: "人声美化", note: "温暖、清晰、更通透" },
   { id: "voice-enhance", label: "人声增强", note: "低切 + 压缩" },
   { id: "loudnorm", label: "响度统一", note: "EBU R128 标准化" },
 ];
+const channelLabels: Array<[ChannelLayout, string]> = [["stereo", "立体声"], ["mono", "单声道混合"], ["left", "仅左声道"], ["right", "仅右声道"], ["swap", "左右互换"]];
+const separationLabels: Array<["none" | "voice" | "background", string]> = [["none", "原声"], ["voice", "仅保留人声"], ["background", "仅保留背景音"]];
+
+export type SeparationState = { available: boolean; hasStems: boolean; busy: string | null };
 
 function Slider({ label, value, min, max, step, format, onChange, onReset, keyframe }: { label: string; value: number; min: number; max: number; step: number; format: (value: number) => string; onChange: (value: number) => void; onReset: () => void; keyframe?: KeyframeControl }) {
   return <label className={`inspector-slider${keyframe ? " keyed" : ""}`}>
@@ -81,9 +86,10 @@ const signed = (value: number) => `${value > 0 ? "+" : ""}${Math.round(value * 1
 type InspectorProps = {
   clip: Clip | null; asset: Asset | null; tab: InspectorTab; time: number; transitionAllowed: boolean;
   onTab: (tab: InspectorTab) => void; onChange: Change; onCrop: () => void; onSeek: (time: number) => void;
+  separation: SeparationState; onSeparate: (mode: "voice" | "background") => void; onTranslate: () => void;
 };
 
-export const Inspector = memo(function Inspector({ clip, asset, tab: requestedTab, time, transitionAllowed, onTab, onChange, onCrop, onSeek }: InspectorProps) {
+export const Inspector = memo(function Inspector({ clip, asset, tab: requestedTab, time, transitionAllowed, onTab, onChange, onCrop, onSeek, separation, onSeparate, onTranslate }: InspectorProps) {
   const [speedInput, setSpeedInput] = useState("");
   const defaults = defaultClipSettings();
   const isText = asset?.kind === "text";
@@ -185,6 +191,21 @@ export const Inspector = memo(function Inspector({ clip, asset, tab: requestedTa
               <Slider label={t("淡入")} value={clip.audio.fadeIn} min={0} max={Math.min(10, clipDuration(clip))} step={0.1} format={(value) => `${value.toFixed(1)}s`} onChange={(fadeIn) => onChange({ audio: { ...clip.audio, fadeIn } }, "fadeIn")} onReset={() => onChange({ audio: { ...clip.audio, fadeIn: 0 } }, "fadeIn-reset")} />
               <Slider label={t("淡出")} value={clip.audio.fadeOut} min={0} max={Math.min(10, clipDuration(clip))} step={0.1} format={(value) => `${value.toFixed(1)}s`} onChange={(fadeOut) => onChange({ audio: { ...clip.audio, fadeOut } }, "fadeOut")} onReset={() => onChange({ audio: { ...clip.audio, fadeOut: 0 } }, "fadeOut-reset")} />
               <label className="inspector-toggle"><input type="checkbox" checked={clip.audio.muted} onChange={(event) => onChange({ audio: { ...clip.audio, muted: event.target.checked } }, "muted")} />{t("静音此片段")}</label>
+              <h4>{t("声音处理")}</h4>
+              <div className="effect-toggles">{audioEffects.map((effect) => <button key={effect.id} className={clip.audio.effects.includes(effect.id) ? "active" : ""} onClick={() => onChange({ audio: { ...clip.audio, effects: clip.audio.effects.includes(effect.id) ? clip.audio.effects.filter((item) => item !== effect.id) : [...clip.audio.effects, effect.id] } }, `audio-effect-${effect.id}`)}><b>{t(effect.label)}</b><small>{t(effect.note)}</small></button>)}</div>
+              {clip.audio.effects.includes("loudnorm") && <label className="text-row">{t("响度目标")}<select value={clip.audio.loudnessTarget ?? -16} onChange={(event) => onChange({ audio: { ...clip.audio, loudnessTarget: Number(event.target.value) } }, "loudness-target")}><option value={-14}>-14 LUFS · YouTube / B 站</option><option value={-16}>-16 LUFS · {t("口播 / 播客")}</option><option value={-23}>-23 LUFS · EBU R128</option></select></label>}
+              <h4>{t("声音分离")}</h4>
+              <div className="segmented separation">{separationLabels.map(([mode, label]) => <button key={mode} disabled={Boolean(separation.busy) || (mode !== "none" && !separation.available)} className={(clip.audio.separation ?? "none") === mode ? "active" : ""} onClick={() => mode === "none" ? onChange({ audio: { ...clip.audio, separation: "none" } }, "separation") : onSeparate(mode)}>{t(label)}</button>)}</div>
+              <p className="inspector-note">{separation.busy ?? (!separation.available ? t("声音分离组件未安装（需要在构建时包含本地分离运行时）。") : separation.hasStems ? t("已分离，可随时切换。") : t("首次使用会在本机分析整段素材，长视频需要几分钟。"))}</p>
+              <h4>{t("声道")}</h4>
+              <Slider label={t("立体声平衡")} value={clip.audio.pan ?? 0} min={-1} max={1} step={0.05} format={(value) => value === 0 ? t("居中") : value < 0 ? t("左 {value}", { value: Math.round(-value * 100) }) : t("右 {value}", { value: Math.round(value * 100) })} onChange={(pan) => onChange({ audio: { ...clip.audio, pan } }, "pan")} onReset={() => onChange({ audio: { ...clip.audio, pan: 0 } }, "pan-reset")} />
+              <label className="text-row">{t("声道配置")}<select value={clip.audio.channels ?? "stereo"} onChange={(event) => onChange({ audio: { ...clip.audio, channels: event.target.value as ChannelLayout } }, "channels")}>{channelLabels.map(([layout, label]) => <option key={layout} value={layout}>{t(label)}</option>)}</select></label>
+              <h4>{t("变调")}</h4>
+              <Slider label={t("音高")} value={clip.audio.pitch ?? 0} min={-12} max={12} step={1} format={(value) => value === 0 ? t("原调") : `${value > 0 ? "+" : ""}${value}`} onChange={(pitch) => onChange({ audio: { ...clip.audio, pitch } }, "pitch")} onReset={() => onChange({ audio: { ...clip.audio, pitch: 0 } }, "pitch-reset")} />
+              <p className="inspector-note">{t("变调不改变时长；单位为半音。")}</p>
+              {asset.kind === "video" && <><h4>{t("视频翻译")}</h4>
+                <button className="ghost-action full translate-button" onClick={onTranslate}>{t("翻译并配音…")}</button>
+                <p className="inspector-note">{t("识别原声 → 翻译 → 用系统语音合成配音并对齐时间，可保留背景音。")}</p></>}
               <p className="inspector-note">{t("音量最高 200%，预览与导出一致；音频效果在预览中为近似效果。")}</p>
             </section>}
             {tab === "speed" && <section>
@@ -230,9 +251,6 @@ export const Inspector = memo(function Inspector({ clip, asset, tab: requestedTa
                   <Slider label={t("相似度")} value={clip.chromaKey.similarity} min={0.05} max={0.6} step={0.01} format={percent} onChange={(similarity) => onChange({ chromaKey: { ...clip.chromaKey, similarity } }, "chroma-similarity")} onReset={() => onChange({ chromaKey: { ...clip.chromaKey, similarity: 0.3 } }, "chroma-reset")} />
                 </div>}
                 <p className="inspector-note">{t("画面降噪和美颜在预览中为近似效果，导出时使用 FFmpeg 精确处理。")}</p></>}
-              {hasSound && <><h4>{t("音频效果")}</h4>
-                <div className="effect-toggles">{audioEffects.map((effect) => <button key={effect.id} className={clip.audio.effects.includes(effect.id) ? "active" : ""} onClick={() => onChange({ audio: { ...clip.audio, effects: clip.audio.effects.includes(effect.id) ? clip.audio.effects.filter((item) => item !== effect.id) : [...clip.audio.effects, effect.id] } }, `audio-effect-${effect.id}`)}><b>{t(effect.label)}</b><small>{t(effect.note)}</small></button>)}</div>
-                <p className="inspector-note">{t("音频效果在导出时生效。")}</p></>}
             </section>}
           </>}
     </div>

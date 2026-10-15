@@ -57,10 +57,18 @@ Windows x64 releases produce an unsigned one-click `.exe` without credentials; W
 ### Import and edit on a multi-track timeline
 
 1. Click **Import media** (⌘I) and pick any mix of videos, images, GIFs and audio. They appear in the library in import order with a first-frame thumbnail and duration; nothing is placed on the timeline automatically.
-2. Drag media from the library onto a track. Drop it on the empty strip above the tracks to create a new picture-in-picture track, so images and videos can be stacked.
+2. Drag media from the library onto a track. On the main track a caret shows where the clip will land: drop on the strip before 0:00, or on the first half of a clip, to insert in front of it. Images last 4 seconds by default. Drop on the empty strip above the tracks to create a new overlay track, so images and videos can be stacked.
+   In the library, ⌘A selects all, ⌘C/⌘X/⌘V copy, cut and paste entries (⌘V on the timeline places them at the playhead), and ⌘/⇧-click selects several.
 3. Use the toolbar above the timeline: import, select/blade mode, undo/redo/reset, split, trim left/right, delete, marker, freeze, reverse, mirror, rotate, crop, smart talk cut, smart scene split and a voice-over recorder with a 3-second countdown. Toggles on the right control main-track magnet, snapping, linkage and the hover preview axis; −/+ zooms the timeline and **…** sets track height and waveform size.
-4. Select a clip to edit it in the right-hand panel: picture (scale, position, rotation, opacity, mirror, crop), audio (volume, fades, effects), speed, in/out animations, colour adjustment and AI effects. Preview and export use the same settings.
+4. Select a clip to edit it in the right-hand panel: picture (scale, position, rotation, opacity, mirror, crop), audio (volume, fades, sound tools), speed, in/out animations, colour adjustment and AI effects. Preview and export use the same settings.
 5. Click the cover tile at the left of the main track to design a 1280 × 720 thumbnail.
+
+### Original audio and sound tools
+
+- A video's own sound gets its own **Original audio** lane under the video track, with its waveform. Drag the yellow line up or down to set the volume (0–200%); the speaker button mutes it.
+- The **Audio** tab in the right panel has loudness normalisation (−14/−16/−23 LUFS), noise reduction, voice beautify and voice enhance, stereo balance, channel layout (stereo, mono, left, right, swap) and pitch shift in semitones without changing the duration.
+- **Voice separation** keeps only the voice or only the background. It runs the MIT-licensed HTDemucs model on your computer; the first use downloads the model (about 80 MB) and separation of long videos takes a few minutes. Results are cached.
+- **Video translation** (Audio tab → *Translate and dub*) uses the captions: lines missing the target language are translated with your AI API settings, then each line is voiced with a built-in system voice and fitted to the caption's timing (sped up to 1.6× if needed). The dub goes on a new audio track, and the original can keep only its background, be ducked to 15% or be muted.
 
 ### Keyframes, titles, transitions and speed curves
 
@@ -100,6 +108,8 @@ Windows x64 releases produce an unsigned one-click `.exe` without credentials; W
 ![DashCut local AI hardware check and model selector](docs/images/dashcut-local-model.png)
 
 ### Apply one subtitle style everywhere
+
+Captions are edited directly on the timeline's caption track: double-click text to change it, drag the ends to retime, double-click empty space to add one, and press ⌫ to delete the selection.
 
 1. In **Captions**, click **Subtitle style**.
 2. Choose the font, text size, text color, outline color/width, and background opacity.

@@ -74,10 +74,19 @@ export type Subtitle = { id: number; start: number; end: number; zh: string; en:
 export type Transcript = { language: string; source: "local" | "cloud"; words: TimedWord[]; sentences: Array<{ start: number; end: number }> };
 /** Canvas and caption settings captured into history by edits that change them (e.g. the assistant). */
 export type ProjectView = { ratio: "16:9" | "9:16"; captionStyle: Record<string, unknown>; captionMode: "zh" | "en" | "both" };
-export type Project = { tracks: Track[]; clips: Clip[]; markers: Marker[]; subtitles: Subtitle[]; transcripts?: Record<string, Transcript>; view?: ProjectView };
+/** Separated stems per asset (full-length renders of its audio), produced on demand. */
+export type Stems = { voice: string; background: string };
+export type Project = { tracks: Track[]; clips: Clip[]; markers: Marker[]; subtitles: Subtitle[]; transcripts?: Record<string, Transcript>; stems?: Record<string, Stems>; view?: ProjectView };
+
+/** Audio file that should play for a clip: a separated stem when the clip keeps only voice or background. */
+export function audioSourceFor(project: Project, clip: Clip, asset: Asset) {
+  const stems = project.stems?.[asset.id];
+  if (!stems || !clip.audio.separation || clip.audio.separation === "none") return null;
+  return clip.audio.separation === "voice" ? stems.voice : stems.background;
+}
 export type EditOptions = { magnet: boolean; linkage: boolean };
 
-export const defaultStillDuration = 3;
+export const defaultStillDuration = 4;
 export const minClipDuration = 0.1;
 
 let counter = 0;
@@ -580,12 +589,13 @@ export function toComposition(project: Project, assets: Asset[], settings: { rat
       animationOut: clip.animationOut,
       hasAudio: asset.kind === "video" && asset.hasAudio && clip.freezeAt === null && !track.muted,
       audio: clip.audio,
+      audioPath: audioSourceFor(project, clip, asset) ?? undefined,
     }];
   }));
   const audios: CompositionAudio[] = project.tracks.filter((track) => track.kind === "audio" && !track.muted).flatMap((track) => clipsOn(track.id).flatMap(pieces).flatMap((clip) => {
     const asset = byId.get(clip.assetId);
     if (!asset || !asset.hasAudio) return [];
-    return [{ path: asset.sourcePath, start: clip.start, in: clip.in, out: clip.out, speed: clip.speed, audio: clip.audio }];
+    return [{ path: audioSourceFor(project, clip, asset) ?? asset.sourcePath, start: clip.start, in: clip.in, out: clip.out, speed: clip.speed, audio: clip.audio }];
   }));
   return { width, height, fps: settings.fps, platform: settings.platform, duration: projectDuration(project), visuals, audios, subtitles: project.subtitles, subtitleStyle: settings.subtitleStyle, subtitleMode: settings.subtitleMode };
 }

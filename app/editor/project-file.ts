@@ -46,6 +46,10 @@ export type ProjectDocument = {
   transitions: unknown[];
   markers: Marker[];
   subtitles: Subtitle[];
+  /** Recognised words per asset (optional; older files have none). */
+  transcripts?: Project["transcripts"];
+  /** Separated voice/background stems per asset (optional cache paths). */
+  stems?: Project["stems"];
   captionStyle: CaptionStyle;
   captionMode: CaptionMode;
   exportSettings: ExportSettings;
@@ -89,6 +93,8 @@ export function buildDocument(state: EditorState, now = new Date()): ProjectDocu
     transitions: [],
     markers: state.project.markers,
     subtitles: state.project.subtitles,
+    transcripts: state.project.transcripts,
+    stems: state.project.stems,
     captionStyle: state.captionStyle,
     captionMode: state.captionMode,
     exportSettings: state.exportSettings,
@@ -159,7 +165,7 @@ export function readDocument(doc: ProjectDocument, resolveUrl: (absolutePath: st
     title: doc.meta.title,
     createdAt: doc.meta.createdAt,
     ratio: doc.canvas.ratio,
-    project: { tracks: doc.tracks, clips: doc.clips, markers: doc.markers, subtitles: doc.subtitles },
+    project: { tracks: doc.tracks, clips: doc.clips, markers: doc.markers, subtitles: doc.subtitles, ...(doc.transcripts ? { transcripts: doc.transcripts } : {}), ...(doc.stems ? { stems: doc.stems } : {}) },
     assets,
     captionStyle: doc.captionStyle,
     captionMode: doc.captionMode,

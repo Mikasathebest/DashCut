@@ -2,7 +2,7 @@
 
 import { CSSProperties, memo, useEffect, useMemo, useRef, useState } from "react";
 import { captionLines, SubtitleMode, SubtitleStyle } from "./captions";
-import { Asset, Clip, clipEnd, evaluateVisual, evaluateVolume, Project, renderClips, sourceTimeAt, speedAt, Subtitle, textBaseScale } from "./model";
+import { Asset, audioSourceFor, Clip, clipEnd, evaluateVisual, evaluateVolume, Project, renderClips, sourceTimeAt, speedAt, Subtitle, textBaseScale } from "./model";
 import { measureText, renderText } from "./text";
 import { t } from "../i18n";
 
@@ -40,7 +40,6 @@ type LayerProps = { clip: Clip; asset: Asset; time: number; rate: number; muted:
 /* ------------------------------------------------------------ audio */
 
 // Routing media through Web Audio lets preview volume exceed 100% and approximates the export's audio effects.
-type AudioChain = { gain: GainNode; highpass: BiquadFilterNode; lowpass: BiquadFilterNode; compressor: DynamicsCompressorNode };
 let audioContext: AudioContext | null = null;
 let master: { input: GainNode; analyser: AnalyserNode } | null = null;
 const chains = new WeakMap<HTMLMediaElement, AudioChain | null>();
@@ -77,19 +76,83 @@ export function readLoudness() {
   return meanSquare > 1e-10 ? -0.691 + 10 * Math.log10(meanSquare) + 3.01 : -70;
 }
 
+// Delay-line pitch shifter: two crossfaded read heads sweep through a short buffer, so pitch moves without tempo.
+const pitchWorklet = `class DashCutPitch extends AudioWorkletProcessor {
+  static get parameterDescriptors() { return [{ name: "ratio", defaultValue: 1, minValue: 0.25, maxValue: 4 }]; }
+  constructor() { super(); this.size = 8192; this.window = 2048; this.buffers = [new Float32Array(this.size), new Float32Array(this.size)]; this.write = 0; this.phase = 0; }
+  read(buffer, delay) { let position = this.write - delay; while (position < 0) position += this.size; const index = Math.floor(position); const fraction = position - index; return buffer[index % this.size] * (1 - fraction) + buffer[(index + 1) % this.size] * fraction; }
+  process(inputs, outputs, parameters) {
+    const input = inputs[0]; const output = outputs[0]; const ratio = parameters.ratio[0];
+    const frames = output[0] ? output[0].length : 128;
+    for (let frame = 0; frame < frames; frame += 1) {
+      for (let channel = 0; channel < output.length; channel += 1) this.buffers[channel % 2][this.write] = input[channel] ? input[channel][frame] : (input[0] ? input[0][frame] : 0);
+      this.phase = (this.phase + (1 - ratio) / this.window + 1) % 1;
+      const second = (this.phase + 0.5) % 1;
+      const gainA = Math.sin(Math.PI * this.phase); const gainB = Math.sin(Math.PI * second);
+      for (let channel = 0; channel < output.length; channel += 1) {
+        const buffer = this.buffers[channel % 2];
+        output[channel][frame] = gainA * this.read(buffer, this.phase * this.window) + gainB * this.read(buffer, second * this.window);
+      }
+      this.write = (this.write + 1) % this.size;
+    }
+    return true;
+  }
+}
+registerProcessor("dashcut-pitch", DashCutPitch);`;
+let pitchReady: Promise<boolean> | null = null;
+function loadPitch(context: AudioContext) {
+  pitchReady ??= context.audioWorklet.addModule(URL.createObjectURL(new Blob([pitchWorklet], { type: "text/javascript" }))).then(() => true, () => false);
+  return pitchReady;
+}
+
+type AudioChain = {
+  gain: GainNode; highpass: BiquadFilterNode; lowpass: BiquadFilterNode; compressor: DynamicsCompressorNode;
+  warmth: BiquadFilterNode; presence: BiquadFilterNode; air: BiquadFilterNode;
+  dry: GainNode; wet: GainNode; pitch: AudioWorkletNode | null; matrix: GainNode[]; panner: StereoPannerNode;
+};
+
 function audioChain(element: HTMLMediaElement) {
   if (chains.has(element)) return chains.get(element)!;
   try {
     audioContext ??= new AudioContext();
-    const source = audioContext.createMediaElementSource(element);
-    const highpass = audioContext.createBiquadFilter();
-    highpass.type = "highpass";
-    const lowpass = audioContext.createBiquadFilter();
-    lowpass.type = "lowpass";
-    const compressor = audioContext.createDynamicsCompressor();
-    const gain = audioContext.createGain();
-    source.connect(highpass).connect(lowpass).connect(compressor).connect(gain).connect(masterBus(audioContext).input);
-    const chain = { gain, highpass, lowpass, compressor };
+    const context = audioContext;
+    const filter = (type: BiquadFilterType, frequency: number) => {
+      const node = context.createBiquadFilter();
+      node.type = type;
+      node.frequency.value = frequency;
+      return node;
+    };
+    const source = context.createMediaElementSource(element);
+    const highpass = filter("highpass", 10);
+    const lowpass = filter("lowpass", 22000);
+    const warmth = filter("lowshelf", 200);
+    const presence = filter("peaking", 3000);
+    const air = filter("highshelf", 8000);
+    const compressor = context.createDynamicsCompressor();
+    // Pitch runs on a parallel "wet" branch so an unshifted clip has no added latency.
+    const dry = context.createGain();
+    const wet = context.createGain();
+    wet.gain.value = 0;
+    const splitter = context.createChannelSplitter(2);
+    const merger = context.createChannelMerger(2);
+    // Channel layout as a 2×2 gain matrix: [L→L, R→L, L→R, R→R].
+    const matrix = [0, 1, 2, 3].map(() => context.createGain());
+    const panner = context.createStereoPanner();
+    const gain = context.createGain();
+    source.connect(highpass).connect(lowpass).connect(warmth).connect(presence).connect(air).connect(compressor);
+    compressor.connect(dry).connect(splitter);
+    wet.connect(splitter);
+    splitter.connect(matrix[0], 0).connect(merger, 0, 0);
+    splitter.connect(matrix[1], 1).connect(merger, 0, 0);
+    splitter.connect(matrix[2], 0).connect(merger, 0, 1);
+    splitter.connect(matrix[3], 1).connect(merger, 0, 1);
+    merger.connect(panner).connect(gain).connect(masterBus(context).input);
+    const chain: AudioChain = { gain, highpass, lowpass, compressor, warmth, presence, air, dry, wet, pitch: null, matrix, panner };
+    void loadPitch(context).then((ok) => {
+      if (!ok) return;
+      chain.pitch = new AudioWorkletNode(context, "dashcut-pitch", { outputChannelCount: [2] });
+      compressor.connect(chain.pitch).connect(wet);
+    });
     chains.set(element, chain);
     return chain;
   } catch {
@@ -97,6 +160,10 @@ function audioChain(element: HTMLMediaElement) {
     return null;
   }
 }
+
+const channelMatrix: Record<ChannelLayout, [number, number, number, number]> = {
+  stereo: [1, 0, 0, 1], left: [1, 0, 1, 0], right: [0, 1, 0, 1], mono: [0.5, 0.5, 0.5, 0.5], swap: [0, 1, 1, 0],
+};
 
 function applyAudio(element: HTMLMediaElement, clip: Clip, time: number, muted: boolean) {
   const volume = muted ? 0 : evaluateVolume(clip, time);
@@ -106,13 +173,25 @@ function applyAudio(element: HTMLMediaElement, clip: Clip, time: number, muted: 
     return;
   }
   element.volume = 1;
-  const effects = clip.audio.effects;
+  const audio = clip.audio;
+  const effects = audio.effects;
   const enhance = effects.includes("voice-enhance");
   const level = effects.includes("loudnorm");
-  chain.highpass.frequency.value = effects.includes("denoise") ? 100 : enhance ? 80 : 10;
+  const beautify = effects.includes("voice-beautify");
+  chain.highpass.frequency.value = effects.includes("denoise") ? 100 : beautify ? 90 : enhance ? 80 : 10;
   chain.lowpass.frequency.value = effects.includes("denoise") ? 9000 : 22000;
-  chain.compressor.threshold.value = enhance || level ? -24 : 0;
-  chain.compressor.ratio.value = enhance ? 3 : level ? 4 : 1;
+  chain.warmth.gain.value = beautify ? 1.5 : 0;
+  chain.presence.gain.value = beautify ? 3 : 0;
+  chain.air.gain.value = beautify ? -3 : 0;
+  chain.compressor.threshold.value = enhance || level ? -24 : beautify ? -12 : 0;
+  chain.compressor.ratio.value = enhance ? 3 : level ? 4 : beautify ? 2 : 1;
+  const semitones = audio.pitch ?? 0;
+  const shifting = semitones !== 0 && chain.pitch !== null;
+  chain.dry.gain.value = shifting ? 0 : 1;
+  chain.wet.gain.value = shifting ? 1 : 0;
+  chain.pitch?.parameters.get("ratio")?.setValueAtTime(2 ** (semitones / 12), 0);
+  channelMatrix[audio.channels ?? "stereo"].forEach((value, index) => { chain.matrix[index].gain.value = value; });
+  chain.panner.pan.value = audio.pan ?? 0;
   chain.gain.gain.value = volume * (enhance ? 1.3 : level ? 1.4 : 1);
   if (audioContext?.state === "suspended") void audioContext.resume();
 }
@@ -292,9 +371,11 @@ type PreviewProps = {
   subtitleMode: SubtitleMode;
   subtitleStyle: SubtitleStyle;
   onImport: () => void;
+  /** Playable URLs for separated stem files, keyed by file path. */
+  stemUrls?: Map<string, string>;
 };
 
-export function Preview({ project, assets, time, rate, muted, ratio, subtitleMode, subtitleStyle, onImport }: PreviewProps) {
+export function Preview({ project, assets, time, rate, muted, ratio, subtitleMode, subtitleStyle, onImport, stemUrls }: PreviewProps) {
   const frameRef = useRef<HTMLDivElement>(null);
   const [frame, setFrame] = useState({ width: 640, height: 360 });
   useEffect(() => {
@@ -308,19 +389,31 @@ export function Preview({ project, assets, time, rate, muted, ratio, subtitleMod
   const drawn = useMemo(() => renderClips(project, assets), [assets, project]);
   const active = (trackId: string) => drawn.filter((clip) => clip.trackId === trackId && time >= clip.start && time < clipEnd(clip)).sort((a, b) => a.start - b.start);
   const visualTracks = project.tracks.filter((track) => track.kind === "video" && !track.hidden).reverse();
+  // A clip that keeps only its voice or background plays the separated stem instead of its own sound.
+  const stemAsset = (clip: Clip, asset: Asset) => {
+    const path = audioSourceFor(project, clip, asset);
+    const url = path ? stemUrls?.get(path) : undefined;
+    return url ? { ...asset, url, kind: "audio" as const } : null;
+  };
   const layers = visualTracks.flatMap((track) => active(track.id).flatMap((clip) => {
     const asset = assets.get(clip.assetId);
-    return asset && asset.kind !== "audio" ? [{ clip, asset, muted: muted || track.muted }] : [];
+    return asset && asset.kind !== "audio" ? [{ clip, asset, muted: muted || track.muted || Boolean(stemAsset(clip, asset)) }] : [];
   }));
-  const audioLayers = project.tracks.filter((track) => track.kind === "audio").flatMap((track) => active(track.id).flatMap((clip) => {
+  const stemLayers = visualTracks.flatMap((track) => active(track.id).flatMap((clip) => {
     const asset = assets.get(clip.assetId);
-    return asset ? [{ clip, asset, muted: muted || track.muted }] : [];
+    const stem = asset && stemAsset(clip, asset);
+    return stem ? [{ clip, asset: stem, muted: muted || track.muted }] : [];
   }));
+  const audioLayers = [...stemLayers, ...project.tracks.filter((track) => track.kind === "audio").flatMap((track) => active(track.id).flatMap((clip) => {
+    const asset = assets.get(clip.assetId);
+    if (!asset) return [];
+    return [{ clip, asset: stemAsset(clip, asset) ?? asset, muted: muted || track.muted }];
+  }))];
   const subtitle: Subtitle | undefined = project.subtitles.find((item) => time >= item.start && time < item.end);
   const scale = frame.height / 1080;
   return <div ref={frameRef} className={`video-frame ratio-${ratio.replace(":", "-")}`}>
     {layers.map(({ clip, asset, muted: layerMuted }) => <VisualLayer key={clip.id} clip={clip} asset={asset} time={time} rate={rate} muted={layerMuted} frame={frame} ratio={ratio} />)}
-    {audioLayers.map(({ clip, asset, muted: layerMuted }) => <AudioLayer key={clip.id} clip={clip} asset={asset} time={time} rate={rate} muted={layerMuted} />)}
+    {audioLayers.map(({ clip, asset, muted: layerMuted }) => <AudioLayer key={`${clip.id}-${asset.url}`} clip={clip} asset={asset} time={time} rate={rate} muted={layerMuted} />)}
     {!project.clips.length && <button className="empty-stage" onClick={onImport}><span>＋</span><strong>{t("导入素材开始创作")}</strong><small>{t("导入后从左侧素材库拖到时间轴")}</small></button>}
     {subtitle && <CaptionOverlay subtitle={subtitle} mode={subtitleMode} style={subtitleStyle} scale={scale} />}
   </div>;

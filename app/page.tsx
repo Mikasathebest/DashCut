@@ -16,7 +16,7 @@ import {
   cutSourceRanges, mainTrack, placeClip, Project, projectDuration, pruneTracks, sourceRangeToTimeline, sourceTimeAt, splitAtSourceTimes, splitClip,
   Subtitle, TextLayer, TimedWord, toComposition, canvasSize, trackClips, Transcript, trimAt, uid, updateClip, createProject,
 } from "./editor/model";
-import { bestAudioModel, defaultSubtitleStyle, normalizeSubtitleStyle, retimeSubtitle, shiftSubtitles, SubtitleStyle } from "./editor/captions";
+import { bestAudioModel, defaultSubtitleStyle, normalizeSubtitleStyle, shiftSubtitles, SubtitleStyle } from "./editor/captions";
 import { CaptionStyleEditor, CaptionTimingBar } from "./editor/CaptionTools";
 import { applyAgentEdits, AgentContext, AgentOp, cleanCutCandidates, findSegments, getCaptions, getTranscript, serializeTimeline, buildAliases } from "./editor/agent";
 import { AgentMessage, AgentPanel } from "./editor/AgentPanel";
@@ -24,6 +24,7 @@ import { agentSkills, agentSystemPrompt, agentToolSpecs, AgentSkill } from "./ed
 import { CleanCutReview } from "./editor/CleanCutReview";
 import { Preview } from "./editor/Preview";
 import { TranscriptPanel } from "./editor/TranscriptPanel";
+import { TranslateModal, TranslateRequest } from "./editor/TranslateModal";
 import { analyzeCleanCut, CleanCutItem, CleanCutSettings, defaultCleanCutSettings, deriveSentences, silenceItems, timelineTranscript, TranscriptWord, wordsToCuts } from "./editor/transcript";
 import { clampZoom, DropTarget, formatClock, Timeline, TimelineMode, TimelineSettings, TimelineToolbar, Toggles, ToolbarAction } from "./editor/Timeline";
 
@@ -66,7 +67,7 @@ const formatLabels: Record<CompositionOutput["format"], string> = { mp4: "MP4", 
 
 function isTyping(target: EventTarget | null) {
   const element = target as HTMLElement | null;
-  return Boolean(element?.closest("input, textarea, select, [contenteditable=true]"));
+  return Boolean(element?.closest?.("input, textarea, select, [contenteditable=true]"));
 }
 
 type Recovery = { id: string; title: string; savedAt: string; projectPath: string };
@@ -95,6 +96,11 @@ export default function Home() {
   // Playback speed of the clock: J/K/L shuttle between -4× and 4×.
   const [shuttle, setShuttle] = useState(1);
   const clipboard = useRef<Clip[]>([]);
+  // Library clipboard and which area (library or timeline) keyboard shortcuts act on.
+  const assetClipboard = useRef<{ assets: Asset[]; cut: boolean }>({ assets: [], cut: false });
+  const lastClipboard = useRef<"clips" | "assets">("clips");
+  const focusZone = useRef<"library" | "timeline">("timeline");
+  const [selectedAssets, setSelectedAssets] = useState<string[]>([]);
   const [hoverTime, setHoverTime] = useState<number | null>(null);
   const [muted, setMuted] = useState(false);
   const [ratio, setRatio] = useState<"16:9" | "9:16">("16:9");
@@ -148,6 +154,11 @@ export default function Home() {
   const [showAiKey, setShowAiKey] = useState(false);
   const [captionProgress, setCaptionProgress] = useState<{ progress: number; stage: string } | null>(null);
   const [selectedSubtitle, setSelectedSubtitle] = useState<number | null>(null);
+  const [separationReady, setSeparationReady] = useState<{ runtime: boolean; model: boolean }>({ runtime: false, model: false });
+  const [separating, setSeparating] = useState<string | null>(null);
+  const [stemUrls, setStemUrls] = useState<Map<string, string>>(() => new Map());
+  const [translateOpen, setTranslateOpen] = useState(false);
+  const [translating, setTranslating] = useState(false);
   const [hotwords, setHotwords] = useState("");
   const [cleanCutSettings, setCleanCutSettings] = useState<CleanCutSettings>(defaultCleanCutSettings);
   const [agentOpen, setAgentOpen] = useState(false);
@@ -249,6 +260,15 @@ export default function Home() {
   }, [aiConfig.baseUrl, aiConfig.model]);
 
   useEffect(() => window.dashCutDesktop?.onCaptionProgress?.((value) => setCaptionProgress(value)), []);
+  useEffect(() => {
+    void window.dashCutDesktop?.separationStatus?.().then((status) => setSeparationReady({ runtime: status.runtime.ready, model: status.model.installed })).catch(() => undefined);
+  }, []);
+  // Stem files live outside the project's media; allow them through the media protocol as they appear.
+  useEffect(() => {
+    const paths = Object.values(project.stems ?? {}).flatMap((stems) => [stems.voice, stems.background]).filter((item) => !stemUrls.has(item));
+    if (!paths.length || !window.dashCutDesktop) return;
+    void window.dashCutDesktop.registerMedia(paths).then((urls) => setStemUrls((map) => new Map([...map, ...paths.map((item, index) => [item, urls[index]] as [string, string])])));
+  }, [project.stems, stemUrls]);
 
   useEffect(() => {
     const saved = savedEditingSettings();
@@ -406,6 +426,61 @@ export default function Home() {
         void window.dashCutDesktop.extractWaveform(asset.sourcePath).then((wave) => patchAsset(asset.id, { peaks: wave.peaks, peaksPerSecond: wave.peaksPerSecond, hasAudio: wave.peaks.length > 0 })).catch(() => undefined);
       }
     }
+  }
+
+  /** Select all / copy / cut / paste inside the media library. Paste duplicates entries; cut removes unused ones. */
+  function libraryCommand(command: "copy" | "cut" | "paste" | "duplicate" | "select-all") {
+    const visible = filteredAssets.map((asset) => asset.id);
+    if (command === "select-all") return setSelectedAssets(visible);
+    const chosen = assets.filter((asset) => selectedAssets.includes(asset.id));
+    if (command === "copy" || command === "cut" || command === "duplicate") {
+      if (!chosen.length) return setToast(t("请先在素材库中选择素材"));
+      assetClipboard.current = { assets: chosen, cut: command === "cut" };
+      lastClipboard.current = "assets";
+      if (command === "cut") {
+        const removable = chosen.filter((asset) => !usedAssets.has(asset.id));
+        // Cut entries stay alive (URLs are not revoked) so a later paste can restore them.
+        setAssets((items) => items.filter((item) => !removable.some((asset) => asset.id === item.id)));
+        setSelectedAssets([]);
+        setToast(removable.length < chosen.length ? t("已剪切 {count} 个素材；正在时间轴中使用的素材保留在素材库", { count: removable.length }) : t("已剪切 {count} 个素材", { count: removable.length }));
+        return;
+      }
+      if (command === "copy") return setToast(t("已复制 {count} 个素材；在素材库粘贴会复制一份，在时间轴粘贴会放到播放头处", { count: chosen.length }));
+    }
+    const copied = assetClipboard.current.assets;
+    if (!copied.length) return setToast(t("剪贴板里没有素材"));
+    const restoring = assetClipboard.current.cut;
+    // Pasting a cut restores the same entries; pasting a copy adds duplicates that share the media file.
+    // Entries a cut left in place (still used on the timeline) are not duplicated.
+    const pasted = restoring ? copied.filter((asset) => !assets.some((item) => item.id === asset.id)) : copied.map((asset) => ({ ...asset, id: uid("asset") }));
+    if (!pasted.length) return setToast(t("剪贴板里没有素材"));
+    setAssets((items) => [...items, ...pasted.filter((asset) => !items.some((item) => item.id === asset.id))]);
+    setSelectedAssets(pasted.map((asset) => asset.id));
+    if (restoring) assetClipboard.current = { assets: pasted, cut: false };
+    setToast(t("已粘贴 {count} 个素材", { count: pasted.length }));
+  }
+
+  /** Places library assets at the playhead in order: visuals on the main track, audio on an audio track. */
+  function pasteAssetsToTimeline() {
+    const copied = assetClipboard.current.assets.filter((asset) => asset.kind !== "text");
+    if (!copied.length) return setToast(t("剪贴板里没有素材"));
+    if (assetClipboard.current.cut) setAssets((items) => [...items, ...copied.filter((asset) => !items.some((item) => item.id === asset.id))]);
+    let next = project;
+    let cursor = current;
+    const ids: string[] = [];
+    for (const asset of copied) {
+      const kind = asset.kind === "audio" ? "audio" : "video";
+      const resolved = kind === "video" ? { project: next, trackId: mainTrack(next).id } : resolveTrack(next, next.tracks.find((track) => track.kind === "audio" && hasRoom(next, track.id, cursor, asset.duration))?.id ?? "new-bottom", "audio", cursor, asset.duration);
+      const clip = createClip(asset, resolved.trackId, cursor);
+      next = placeClip(resolved.project, clip, resolved.trackId, cursor + 0.001, options);
+      const placed = next.clips.find((item) => item.id === clip.id);
+      cursor = placed ? clipEnd(placed) : cursor + asset.duration;
+      ids.push(clip.id);
+    }
+    assetClipboard.current = { ...assetClipboard.current, cut: false };
+    commit(pruneTracks(next));
+    setSelection(ids);
+    setToast(t("已把 {count} 个素材放到时间轴", { count: ids.length }));
   }
 
   function addText(style: Partial<typeof defaultTextStyle>) {
@@ -670,6 +745,10 @@ export default function Home() {
         return;
       }
       case "delete":
+        if (!selectedClips.length && selectedSubtitle !== null) {
+          setSubtitles(project.subtitles.filter((item) => item.id !== selectedSubtitle));
+          return setSelectedSubtitle(null);
+        }
         if (!selectedClips.length) return;
         commit(pruneTracks(deleteClips(project, selection, options)));
         return setSelection([]);
@@ -703,9 +782,14 @@ export default function Home() {
 
   const actionRef = useRef(runAction);
   useEffect(() => { actionRef.current = runAction; });
-  const clipboardCommand = (command: "copy" | "cut" | "paste" | "duplicate") => {
-    if (command === "copy" || command === "cut") return void copySelection(command === "cut");
-    if (command === "paste") return pasteClips();
+  const clipboardCommand = (command: "copy" | "cut" | "paste" | "duplicate" | "select-all") => {
+    if (focusZone.current === "library") return libraryCommand(command);
+    if (command === "select-all") return setSelection(project.clips.filter((clip) => !project.tracks.find((track) => track.id === clip.trackId)?.locked).map((clip) => clip.id));
+    if (command === "copy" || command === "cut") {
+      if (copySelection(command === "cut")) lastClipboard.current = "clips";
+      return;
+    }
+    if (command === "paste") return lastClipboard.current === "assets" ? pasteAssetsToTimeline() : pasteClips();
     if (copySelection(false)) pasteClips(Math.max(...selectedClips.map(clipEnd)));
   };
   const transportRef = useRef({ shuttle: shuttleTo, step: stepFrames, clipboard: clipboardCommand });
@@ -724,10 +808,11 @@ export default function Home() {
         event.preventDefault();
         return transport[key]();
       }
-      // In the browser build there is no application menu to route clipboard shortcuts.
-      if (meta && !window.dashCutDesktop && ["c", "x", "v", "d"].includes(key)) {
+      // The app menu handles ⌘ shortcuts on desktop; the browser build and plain Ctrl on macOS come through here.
+      const menuHandles = window.dashCutDesktop && (event.metaKey || !navigator.platform.startsWith("Mac"));
+      if (meta && !menuHandles && ["a", "c", "x", "v", "d"].includes(key)) {
         event.preventDefault();
-        return transportRef.current.clipboard(key === "c" ? "copy" : key === "x" ? "cut" : key === "v" ? "paste" : "duplicate");
+        return transportRef.current.clipboard(key === "a" ? "select-all" : key === "c" ? "copy" : key === "x" ? "cut" : key === "v" ? "paste" : "duplicate");
       }
       const map: Record<string, ToolbarAction | "play" | "select" | "blade"> = meta
         ? { z: event.shiftKey ? "redo" : "undo", y: "redo", b: "split" }
@@ -798,6 +883,92 @@ export default function Home() {
 
   function setSubtitles(subtitles: Subtitle[], key = "") {
     commit((state) => ({ ...state, subtitles }), key);
+  }
+
+  /* ------------------------------------------------------------ voice / background separation */
+
+  /** Separates an asset once (cached on disk by the main process) and records the stem files on the project. */
+  async function ensureStems(asset: Asset): Promise<boolean> {
+    if (project.stems?.[asset.id]) return true;
+    const desktop = window.dashCutDesktop;
+    if (!desktop || !asset.sourcePath) { setToast(t("声音分离仅支持桌面版")); return false; }
+    if (separating) { setToast(t("正在分离，请稍候")); return false; }
+    try {
+      if (!separationReady.model) {
+        setSeparating(t("正在下载声音分离模型（约 80 MB）…"));
+        await desktop.installSeparation();
+        setSeparationReady((value) => ({ ...value, model: true }));
+      }
+      setSeparating(t("正在分离人声与背景音…"));
+      const stems = await desktop.separateAudio(asset.sourcePath);
+      commit((state) => ({ ...state, stems: { ...state.stems, [asset.id]: { voice: stems.vocals, background: stems.background } } }));
+      return true;
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : t("声音分离失败"));
+      return false;
+    } finally {
+      setSeparating(null);
+      setCaptionProgress(null);
+    }
+  }
+
+  async function separateSelected(mode: "voice" | "background") {
+    const clipId = primaryClip?.id;
+    if (!clipId || !primaryAsset) return;
+    if (!await ensureStems(primaryAsset)) return;
+    commit((state) => {
+      const clip = state.clips.find((item) => item.id === clipId);
+      return clip ? updateClip(state, clipId, { audio: { ...clip.audio, separation: mode } }, options) : state;
+    });
+    setToast(mode === "voice" ? t("已切换为仅保留人声") : t("已切换为仅保留背景音"));
+  }
+
+  /* ------------------------------------------------------------ video translation */
+
+  async function runTranslation({ language, voice, original }: TranslateRequest) {
+    const desktop = window.dashCutDesktop;
+    if (!desktop || translating) return;
+    setTranslating(true);
+    try {
+      let subtitles = project.subtitles;
+      if (subtitles.some((item) => !item[language].trim() && (item.zh.trim() || item.en.trim()))) {
+        if (!aiConfig.baseUrl.trim() || !aiConfig.apiKey.trim() || !aiConfig.model.trim()) throw new Error(t("字幕缺少目标语言译文，请先在字幕面板填写 API 设置"));
+        setCaptionProgress({ progress: 0, stage: t("正在翻译") });
+        subtitles = await desktop.translateSubtitles({ config: aiConfig, subtitles });
+      }
+      setCaptionProgress({ progress: 0, stage: t("正在合成配音…") });
+      const dub = await desktop.renderDub({ language, voice: voice || undefined, lines: subtitles.map((item) => ({ start: item.start, end: item.end, text: item[language] })) });
+      const sources = project.clips.filter((clip) => {
+        const asset = assetMap.get(clip.assetId);
+        return asset?.kind === "video" && asset.hasAudio && project.tracks.find((track) => track.id === clip.trackId)?.kind === "video";
+      });
+      if (original === "background") {
+        for (const asset of new Set(sources.map((clip) => assetMap.get(clip.assetId)!))) if (!await ensureStems(asset)) throw new Error(t("声音分离失败，配音未添加"));
+      }
+      const [url] = await desktop.registerMedia([dub.outputPath]);
+      const name = language === "en" ? "Dub (English).wav" : "配音（中文）.wav";
+      const asset: Asset = { id: uid("asset"), name, kind: "audio", url, sourcePath: dub.outputPath, duration: dub.duration, width: 0, height: 0, hasAudio: true, thumbnail: "", frames: [], peaks: [], peaksPerSecond: 0 };
+      setAssets((items) => [...items, asset]);
+      void desktop.extractWaveform(dub.outputPath).then((wave) => patchAsset(asset.id, { peaks: wave.peaks, peaksPerSecond: wave.peaksPerSecond })).catch(() => undefined);
+      commit((state) => {
+        const created = addTrack({ ...state, subtitles }, "audio", "bottom");
+        let next = { ...created.project, clips: [...created.project.clips, createClip(asset, created.trackId, 0)] };
+        for (const clip of sources) {
+          const audio = original === "background" ? { ...clip.audio, separation: "background" as const } : original === "duck" ? { ...clip.audio, volume: Math.min(clip.audio.volume, 0.15), volumeKeyframes: undefined } : { ...clip.audio, muted: true };
+          next = updateClip(next, clip.id, { audio }, options);
+        }
+        return pruneTracks(next);
+      });
+      setSubtitleMode(language);
+      setTranslateOpen(false);
+      const overflow = dub.lines.filter((line) => line.overflow > 0.05).length;
+      setToast(overflow ? t("配音已添加到新音频轨；{count} 句即使加速仍超出字幕时长，可以手动调整", { count: overflow }) : t("配音已添加到新音频轨，字幕切换为译文"));
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : t("视频翻译失败"));
+    } finally {
+      setTranslating(false);
+      setCaptionProgress(null);
+    }
   }
 
   /** Runs recognition (and optional translation); resolves with the message shown to the user. */
@@ -914,15 +1085,6 @@ export default function Home() {
   }
 
   // Changing a start moves this caption and every later one; extending an end pushes later captions only on overlap.
-  function updateSubtitleTime(id: number, field: "start" | "end", value: number) {
-    const subtitle = project.subtitles.find((item) => item.id === id);
-    if (!subtitle || !Number.isFinite(value) || value < 0 || (field === "end" && value <= subtitle.start)) {
-      setToast(t("字幕时间不能为负，结束时间必须大于开始时间"));
-      return false;
-    }
-    setSubtitles(retimeSubtitle(project.subtitles, id, field, value));
-    return true;
-  }
 
   function shiftCaptions(delta: number, fromSelected: boolean) {
     if (!project.subtitles.length) return;
@@ -933,9 +1095,6 @@ export default function Home() {
       : (delta > 0 ? t("全部字幕已延后 {seconds} 秒", { seconds }) : t("全部字幕已提前 {seconds} 秒", { seconds })));
   }
 
-  function updateSubtitle(id: number, field: "zh" | "en", value: string) {
-    setSubtitles(project.subtitles.map((item) => item.id === id ? { ...item, [field]: value } : item), `subtitle-${id}-${field}`);
-  }
 
   async function checkHardware() {
     setHardwareOpen(true);
@@ -1543,6 +1702,10 @@ export default function Home() {
   useEffect(() => {
     commandRef.current = (command: string) => {
       const typing = isTyping(document.activeElement);
+      if (command === "select-all") {
+        if (typing) return void window.dashCutDesktop?.nativeEdit("selectAll");
+        return clipboardCommand("select-all");
+      }
       if (["copy", "cut", "paste", "duplicate"].includes(command)) {
         if (typing) return void window.dashCutDesktop?.nativeEdit(command === "duplicate" ? "copy" : command as "copy" | "cut" | "paste");
         return clipboardCommand(command as "copy" | "cut" | "paste" | "duplicate");
@@ -1569,7 +1732,16 @@ export default function Home() {
   const mediaPanel = <>
     <button className="upload-card" onClick={() => fileInputRef.current?.click()}><span>＋</span><strong>{t("导入素材")}</strong><small>{t("视频、图片、动图、音频可混合多选")}</small></button>
     <div className="media-filters">{(["all", "video", "image", "audio"] as const).map((filter) => <button key={filter} className={mediaFilter === filter ? "active" : ""} onClick={() => setMediaFilter(filter)}>{filter === "all" ? t("全部 {count}", { count: assets.length }) : filter === "image" ? t("图片") : t(kindLabels[filter])}</button>)}</div>
-    <div className="asset-grid">{filteredAssets.map((asset) => <div key={asset.id} className={`asset-card${usedAssets.has(asset.id) ? " used" : ""}`} draggable onDragStart={(event) => { event.dataTransfer.setData("application/x-dashcut-asset", asset.id); event.dataTransfer.effectAllowed = "copy"; setDraggingAssetId(asset.id); }} onDragEnd={() => setDraggingAssetId(null)} onDoubleClick={() => appendAsset(asset)} title={t("拖到时间轴，或双击添加到末尾")}>
+    <div className="asset-grid">{filteredAssets.map((asset) => <div key={asset.id} className={`asset-card${usedAssets.has(asset.id) ? " used" : ""}${selectedAssets.includes(asset.id) ? " selected" : ""}`} onClick={(event) => {
+      // ⌘/Ctrl toggles, Shift extends from the last selected card, a plain click selects one.
+      if (event.metaKey || event.ctrlKey) return setSelectedAssets((ids) => ids.includes(asset.id) ? ids.filter((id) => id !== asset.id) : [...ids, asset.id]);
+      if (event.shiftKey && selectedAssets.length) {
+        const order = filteredAssets.map((item) => item.id);
+        const [from, to] = [order.indexOf(selectedAssets.at(-1)!), order.indexOf(asset.id)].sort((a, b) => a - b);
+        return setSelectedAssets(order.slice(from, to + 1));
+      }
+      setSelectedAssets([asset.id]);
+    }} draggable onDragStart={(event) => { event.dataTransfer.setData("application/x-dashcut-asset", asset.id); event.dataTransfer.effectAllowed = "copy"; setDraggingAssetId(asset.id); }} onDragEnd={() => setDraggingAssetId(null)} onDoubleClick={() => appendAsset(asset)} title={t("拖到时间轴，或双击添加到末尾")}>
       <div className="asset-thumb" style={asset.thumbnail ? { backgroundImage: `url("${asset.thumbnail}")` } : undefined}>
         {asset.kind === "audio" && <Icon name="music" size={22} />}
         <span className="asset-kind">{t(kindLabels[asset.kind])}</span>
@@ -1606,16 +1778,7 @@ export default function Home() {
     <div className="recognition-meta"><span><i></i> {recognitionEngine === "cloud" ? t("云端识别 · 估算时间") : hardware?.assessment.tier === "recommended" ? t("本地模式 · 推荐配置") : t("本地模式 · 需要检测")}</span><button onClick={() => setStyleOpen(!styleOpen)}>{t("字幕样式")} {styleOpen ? "⌃" : "⌄"}</button></div>
     {styleOpen && <CaptionStyleEditor style={subtitleStyle} onChange={setSubtitleStyle} />}
     {project.subtitles.length > 0 && <CaptionTimingBar disabled={isGenerating} selected={selectedSubtitle !== null && project.subtitles.some((item) => item.id === selectedSubtitle)} onShift={shiftCaptions} />}
-    <div className="subtitle-list">
-      {project.subtitles.map((item) => <div className={`subtitle-row${current >= item.start && current < item.end ? " active" : ""}${selectedSubtitle === item.id ? " selected" : ""}`} key={item.id} ref={selectedSubtitle === item.id ? (element) => element?.scrollIntoView({ block: "nearest" }) : undefined} onClick={() => { setSelectedSubtitle(item.id); seek(item.start + 0.05); }}>
-        <time>{formatClock(item.start).slice(0, 5)}</time><div>
-          {subtitleMode !== "en" && <input disabled={isGenerating} value={item.zh} onChange={(event) => updateSubtitle(item.id, "zh", event.target.value)} />}
-          {subtitleMode !== "zh" && <input disabled={isGenerating} className="translation" value={item.en} onChange={(event) => updateSubtitle(item.id, "en", event.target.value)} />}
-          <div className="subtitle-timing" onClick={(event) => event.stopPropagation()}>{(["start", "end"] as const).map((field) => <label key={field}>{field === "start" ? t("起") : t("止")}<input key={item[field]} aria-label={field === "start" ? t("开始时间（秒）") : t("结束时间（秒）")} type="number" min="0" step="0.1" defaultValue={item[field].toFixed(2)} disabled={isGenerating} onBlur={(event) => { if (!updateSubtitleTime(item.id, field, event.currentTarget.valueAsNumber)) event.currentTarget.value = item[field].toFixed(2); }} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }} /></label>)}</div>
-        </div><button title={t("删除字幕")} onClick={(event) => { event.stopPropagation(); setSubtitles(project.subtitles.filter((subtitle) => subtitle.id !== item.id)); }}>×</button>
-      </div>)}
-      {!project.subtitles.length && <p className="empty-hint">{t("把含人声的视频或音频拖到时间轴，选择识别模型后生成字幕。")}</p>}
-    </div>
+    <p className="empty-hint caption-edit-hint">{project.subtitles.length ? t("字幕在时间轴的字幕轨上编辑：双击文字修改，拖动两端调整时间，双击空白处新建，选中后按 ⌫ 删除。") : t("把含人声的视频或音频拖到时间轴，选择识别模型后生成字幕。")}</p>
   </>;
 
   const cropClip = cropOpen ? primaryClip : null;
@@ -1643,7 +1806,7 @@ export default function Home() {
     </header>
 
     <section className="workspace">
-      <aside className="side-panel">
+      <aside className="side-panel" onPointerDownCapture={() => { focusZone.current = "library"; }}>
         <nav className="panel-tabs"><button className={leftTab === "media" ? "active" : ""} onClick={() => setLeftTab("media")}><Icon name="film" size={14} />{t("素材")}</button><button className={leftTab === "text" ? "active" : ""} onClick={() => setLeftTab("text")}><Icon name="text" size={14} />{t("文本")}</button><button className={leftTab === "transcript" ? "active" : ""} onClick={() => setLeftTab("transcript")}><Icon name="talk" size={14} />{t("文稿")}</button><button className={leftTab === "subtitles" ? "active" : ""} onClick={() => setLeftTab("subtitles")}><b>{t("字")}</b>{t("自动字幕")}</button></nav>
         <div className="panel-scroll">{leftTab === "media" ? mediaPanel : leftTab === "text" ? <>
           <p className="empty-hint">{t("点击添加到播放头位置；选中后在右侧「文本」中修改文字和样式。")}</p>
@@ -1656,17 +1819,19 @@ export default function Home() {
 
       <section className="stage">
         <div className="stage-toolbar"><span>{busy || (hoverTime !== null && toggles.previewAxis && !playing ? t("预览轴 {time}", { time: formatClock(hoverTime) }) : "")}</span><div className="stage-actions"><button className="ghost-action reframe-button" title={t("跟随人脸自动裁切为竖屏")} onClick={() => setReframeOpen(true)}>✦ {t("智能转竖屏")}</button><div className="segmented ratio-switch"><button className={ratio === "16:9" ? "active" : ""} onClick={() => setRatio("16:9")}>{t("16:9 横屏")}</button><button className={ratio === "9:16" ? "active" : ""} onClick={() => setRatio("9:16")}>{t("9:16 竖屏")}</button></div></div></div>
-        <Preview project={project} assets={assetMap} time={previewTime} rate={playing ? shuttle : 0} muted={muted} ratio={ratio} subtitleMode={subtitleMode} subtitleStyle={subtitleStyle} onImport={() => fileInputRef.current?.click()} />
+        <Preview project={project} assets={assetMap} time={previewTime} rate={playing ? shuttle : 0} muted={muted} ratio={ratio} subtitleMode={subtitleMode} subtitleStyle={subtitleStyle} stemUrls={stemUrls} onImport={() => fileInputRef.current?.click()} />
         <div className="player-controls"><span>{formatClock(current, true, exportFps)} <i>/ {formatClock(duration, true, exportFps)}</i>{playing && shuttle !== 1 && <em className="shuttle-badge">{shuttle > 0 ? "▶" : "◀"} {Math.abs(shuttle)}×</em>}</span><div><button title={t("回到开头")} onClick={() => seek(0)}><Icon name="prev" size={14} /></button><button data-play-toggle className="play" onClick={togglePlay} title={t("播放 / 暂停（空格）")}><Icon name={playing ? "pause" : "play"} size={14} /></button><button title={t("跳到结尾")} onClick={() => seek(duration)}><Icon name="next" size={14} /></button></div><div><LoudnessMeter active={playing && !muted} target={loudnessTarget} /><button title={muted ? t("取消静音") : t("静音预览")} onClick={() => setMuted(!muted)}><Icon name={muted ? "mute" : "volume"} size={15} /></button><button title={t("全屏预览")} onClick={() => void document.querySelector(".video-frame")?.requestFullscreen()}><Icon name="fullscreen" size={14} /></button></div></div>
       </section>
 
       {agentOpen
         ? <AgentPanel messages={agentMessages} running={agentRunning} config={agentConfig} skills={agentSkills} onSend={sendToAgent} onStop={() => void window.dashCutDesktop?.agentStop()} onReset={() => void resetAgent()} onPlan={decidePlan} onUndo={undoAgentEdit}
             onSaveConfig={async (config) => { if (!window.dashCutDesktop) return; try { setAgentConfig(await window.dashCutDesktop.saveAgentConfig(config)); setToast(t("助手设置已保存")); } catch (error) { setToast(error instanceof Error ? error.message : t("保存失败")); } }} onClose={() => setAgentOpen(false)} />
-        : <Inspector clip={primaryClip} asset={primaryAsset} tab={inspectorTab} time={current} transitionAllowed={transitionAllowed} onTab={setInspectorTab} onChange={changeClip} onCrop={() => runAction("crop")} onSeek={seek} />}
+        : <Inspector clip={primaryClip} asset={primaryAsset} tab={inspectorTab} time={current} transitionAllowed={transitionAllowed} onTab={setInspectorTab} onChange={changeClip} onCrop={() => runAction("crop")} onSeek={seek}
+            separation={{ available: separationReady.runtime, hasStems: Boolean(primaryAsset && project.stems?.[primaryAsset.id]), busy: separating ? `${separating}${captionProgress ? ` ${Math.round(captionProgress.progress * 100)}%` : ""}` : null }}
+            onSeparate={(mode) => void separateSelected(mode)} onTranslate={() => setTranslateOpen(true)} />}
     </section>
 
-    <section className="timeline-area">
+    <section className="timeline-area" onPointerDownCapture={() => { focusZone.current = "timeline"; }}>
       <TimelineToolbar mode={mode} onMode={setMode} canUndo={history.past.length > 0} canRedo={history.future.length > 0} hasSelection={selectedClips.length > 0} selectionIsVideo={primaryAsset?.kind === "video" && primaryClip?.freezeAt === null} recording={recording} toggles={toggles} zoom={zoom} settings={timelineSettings}
         onAction={runAction} onToggle={(key) => setToggles((value) => ({ ...value, [key]: !value[key] }))} onZoom={(value) => setZoom(clampZoom(value))} onSettings={setTimelineSettings} />
       <Timeline project={project} assets={assetMap} time={current} hoverTime={hoverTime} duration={duration} selection={selection} mode={mode} toggles={toggles} zoom={zoom} settings={timelineSettings} coverImage={coverImage || mainThumb} fps={exportFps} onTransition={(clipId) => { setSelection([clipId]); setInspectorTab("animation"); setAgentOpen(false); }} draggingAssetId={draggingAssetId}
@@ -1676,6 +1841,22 @@ export default function Home() {
         onZoom={(value) => setZoom(clampZoom(value))} onCover={() => setCoverOpen(true)} onViewport={setViewportWidth}
         subtitleMode={subtitleMode} selectedSubtitle={selectedSubtitle}
         onSelectSubtitle={(id) => { setSelectedSubtitle(id); if (id !== null) setLeftTab("subtitles"); }}
+        onVolume={(clipId, volume) => {
+          const clip = project.clips.find((item) => item.id === clipId);
+          if (!clip) return;
+          // With volume keyframes the whole envelope scales, keeping its shape.
+          const ratio = clip.audio.volume > 0 ? volume / clip.audio.volume : 1;
+          const volumeKeyframes = clip.audio.volumeKeyframes?.map((point) => ({ ...point, value: Math.max(0, Math.min(2, point.value * ratio)) }));
+          commit(updateClip(project, clipId, { audio: { ...clip.audio, volume, volumeKeyframes } }, options));
+        }}
+        onAddSubtitle={(time) => {
+          const id = Math.max(0, ...project.subtitles.map((item) => item.id)) + 1;
+          const start = Math.max(0, time);
+          const next = project.subtitles.filter((item) => item.start > start).sort((a, b) => a.start - b.start)[0];
+          setSubtitles([...project.subtitles, { id, start, end: Math.min(start + 2, next ? next.start : start + 2), zh: "", en: "" }].sort((a, b) => a.start - b.start));
+          setSelectedSubtitle(id);
+          return id;
+        }}
         onSubtitleChange={(id, patch) => setSubtitles(project.subtitles.map((item) => item.id === id ? { ...item, ...patch } : item).sort((a, b) => a.start - b.start))} />
     </section>
 
@@ -1750,6 +1931,8 @@ export default function Home() {
       </div>
     </section></div>}
 
+    {translateOpen && <TranslateModal running={translating} stage={captionProgress ? `${captionProgress.stage} ${Math.round(captionProgress.progress * 100)}%` : separating ?? ""} captionCount={project.subtitles.length} separationAvailable={separationReady.runtime}
+      onRun={(request) => void runTranslation(request)} onCaptions={() => { setTranslateOpen(false); setLeftTab("subtitles"); }} onClose={() => setTranslateOpen(false)} />}
     {healthOpen && <HealthCheck running={health.running} stage={progressStage} issues={health.issues} onRun={() => void runHealthCheck()} onFix={fixHealthIssue} onSeek={(time) => { seek(time); setHealthOpen(false); setExportOpen(false); }} onClose={() => setHealthOpen(false)} />}
 
     {reframeOpen && <div className="modal-backdrop" onMouseDown={() => setReframeOpen(false)}><section className="about-modal reframe-modal" onMouseDown={(event) => event.stopPropagation()}>
