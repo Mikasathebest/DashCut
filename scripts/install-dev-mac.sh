@@ -44,3 +44,6 @@ if [[ "${DASHCUT_SKIP_DMG:-}" != "1" ]]; then
     && echo "Installer: release/DashCut-$version-mac-arm64.dmg" \
     || echo "warning: DMG build failed; the app is installed, rerun later for an installer" >&2
 fi
+
+# Leave only /Applications/DashCut.app; the build copy would otherwise show up in Spotlight and Launchpad.
+rm -rf release/mac-arm64
