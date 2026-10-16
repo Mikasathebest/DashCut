@@ -2,7 +2,7 @@
 // `complete({ system, messages, tools, signal })` so the runtime never sees wire formats.
 // Credentials and request bodies are never placed in errors or logs.
 
-const DEFAULT_OPENAI_BASE_URL = "https://api.example.com/v1";
+const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com";
 const DEFAULT_ANTHROPIC_MODEL = "claude-opus-5-5";
 const ANTHROPIC_VERSION = "2023-06-01";

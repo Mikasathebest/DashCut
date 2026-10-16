@@ -5,7 +5,7 @@ DashCut 极剪桌面版可以在“自动字幕”中切换云端模型或本地
 ## 支持范围
 
 - 开发环境中的 `faster-whisper` 要求 Python 3.9 或更高版本；发布版已经内置兼容版本。
-- Windows / Linux 的 GPU 推理要求 CUDA GPU、CUDA 12 的 cuBLAS 和 CUDA 12 的 cuDNN 9。
+- Windows / Linux 的 GPU 推理要求支持 CUDA 的显卡、CUDA 12 的 cuBLAS 和 CUDA 12 的 cuDNN 9。
 - macOS 可以通过 x86-64 或 ARM64 CPU 运行，但 CTranslate2 的预编译 GPU 后端不支持 Apple Metal GPU。因此 MacBook 会使用 CPU 推理。
 - 不要求系统单独安装 FFmpeg；`faster-whisper` 使用 PyAV 自带的 FFmpeg 库解码音视频。
 
@@ -18,7 +18,7 @@ DashCut 极剪桌面版可以在“自动字幕”中切换云端模型或本地
 | 等级 | CPU | 系统内存 | GPU | 可用磁盘 | 默认模型 |
 | --- | --- | --- | --- | --- | --- |
 | 最低可用 | 4 个逻辑核心 | 8 GB | 可选 | 4 GB | `small` + CPU INT8 |
-| 推荐 | 8 个逻辑核心 | 16 GB | CUDA 8 GB VRAM | 10 GB | `large-v3` + CUDA FP16 |
+| 推荐 | 8 个逻辑核心 | 16 GB | CUDA 显卡 8 GB 显存 | 10 GB | `large-v3` + CUDA FP16 |
 
 原始 Whisper 给出的近似显存需求为：`small` 约 2 GB、`medium` 约 5 GB、`turbo` 约 6 GB、`large` 约 10 GB。`faster-whisper` 的 INT8 模式通常会进一步减少占用，但同时运行视频预览和导出仍需保留余量。[Whisper 模型列表](https://github.com/openai/whisper#available-models-and-languages)
 
@@ -50,4 +50,4 @@ Release 工作流始终构建 Windows x64 一键安装包和一份 macOS Apple S
 
 ## 当前边界
 
-本地运行器输出原语言字幕和词级时间戳。现在可以在自动字幕面板配置 AI API，使用 Qwen 或 Gemini 将识别文本翻译成简体中文和英文，保留本地识别的时间戳。推荐本地 `large-v3` + Qwen3 Next；也可使用 Gemini 云端音频识别，但其时间戳是估算，需要校准。模型实测、速度、成本及配置步骤见 [AI API 字幕指南](AI_API.md)。不要使用 Whisper 的 `translate` 任务代替双向翻译，因为该任务的目标语言仅为英文。
+本地运行器输出原语言字幕和词级时间戳。现在可以在自动字幕面板配置任意 OpenAI 兼容的 AI 接口，将识别文本翻译成简体中文和英文，保留本地识别的时间戳；也可使用可接收音频的 Gemini 模型进行云端识别，但其时间戳是估算，需要校准。不要使用 Whisper 的 `translate` 任务代替双向翻译，因为该任务的目标语言仅为英文。

@@ -12,12 +12,12 @@ Highlights:
 - Local Chinese and English speech recognition with editable caption timing and text
 - Global caption font, size, color, outline, and background controls
 - On-demand `small`, `medium`, `turbo`, and `large-v3` model management
-- Automatic hardware assessment with CPU INT8 and CUDA recommendations
+- Automatic hardware assessment with CPU INT8 and CUDA GPU recommendations
 - Background music controls, 16:9 / 9:16 canvases, and a cover-image studio
 - Bilibili and YouTube export presets with 30 / 60 FPS choices
 - Unsigned Windows x64 one-click `.exe` releases and one macOS Apple Silicon `.dmg`; Apple credentials automatically enable signing and notarization
 
-> Bilingual subtitles: local Whisper now combines with AI API translation to produce Chinese and English captions while preserving recognition timestamps. Gemini cloud audio recognition is also available with estimated timing. See the [tested models, speed, cost and setup guide](docs/AI_API.md).
+> Bilingual subtitles: local Whisper can be combined with any OpenAI-compatible AI API for translation, producing Chinese and English captions while preserving recognition timestamps. Cloud audio recognition with an audio-capable Gemini model is also available, with estimated timing.
 
 ## 2. Installation
 
@@ -102,13 +102,12 @@ Windows x64 releases produce an unsigned one-click `.exe` without credentials; W
 ### Extract Chinese or English captions locally
 
 1. Open **Captions**, choose **Local model**, and let DashCut inspect the device.
-2. Review the detected CPU, CUDA GPU, memory, disk, and runtime status. Pick the recommended model or another supported model.
+2. Review the detected CPU, GPU, memory, disk, and runtime status. Pick the recommended model or another supported model.
 3. Click **Download and install**. Nothing is downloaded before this explicit action.
 4. Import the clips, select the subtitle view (**中文**, **English**, or **双语**), then click **Generate captions**.
 5. `faster-whisper` detects each clip's spoken language. Chinese recognition is written to the Chinese field; English recognition is written to the English field. Review each line and correct names or punctuation before export.
-6. For automatic bilingual captions, enter your AI API API key and enable automatic translation. Qwen3 Next is the default translator; Gemini 3.5 Flash is a tested alternative. Disable automatic translation for offline source-language recognition. Both caption lines remain editable.
+6. For automatic bilingual captions, enter an OpenAI-compatible API base URL and key, pick a chat model, and enable automatic translation. Disable automatic translation for offline source-language recognition. Both caption lines remain editable.
 
-![DashCut local AI hardware check and model selector](docs/images/dashcut-local-model.png)
 
 ### Apply one subtitle style everywhere
 
