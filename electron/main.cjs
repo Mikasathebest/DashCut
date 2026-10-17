@@ -17,6 +17,7 @@ const { setLanguage, tr } = require("./i18n.cjs");
 const { listVoices, renderDub } = require("./dubbing.cjs");
 const { getSeparationStatus, installSeparationModel, separateAudio } = require("./separation.cjs");
 const { createAutosave, createRecentList, findSiblings, loadProject, saveProject } = require("./project-store.cjs");
+const { projectLibrary } = require("./project-library.cjs");
 
 registerMediaScheme(protocol);
 let media;
@@ -222,6 +223,16 @@ ipcMain.handle("project:open", async (_event, requested) => {
   return { projectPath: target, document: doc, missing };
 });
 ipcMain.handle("project:recent", () => recent().list());
+ipcMain.handle("project:library", async () => projectLibrary({
+  recent: await recent().list(),
+  roots: process.env.DASHCUT_PROJECT_ROOTS ? process.env.DASHCUT_PROJECT_ROOTS.split(path.delimiter) : ["videos", "documents", "desktop", "downloads"].map((name) => { try { return app.getPath(name); } catch { return ""; } }).filter(Boolean),
+  ffmpegPath: mediaRuntimePath(),
+  cacheDir: path.join(app.getPath("userData"), "project-previews"),
+  encodeImage: async (file) => {
+    const image = nativeImage.createFromPath(file);
+    return image.isEmpty() ? "" : `data:image/jpeg;base64,${image.resize({ width: 480 }).toJPEG(80).toString("base64")}`;
+  },
+}));
 ipcMain.handle("project:recent-remove", (_event, target) => recent().remove(target));
 ipcMain.handle("project:autosave", (_event, { document, projectPath }) => autosave().write(document.meta.id, { document, projectPath }));
 ipcMain.handle("project:recovery-list", () => autosave().list());

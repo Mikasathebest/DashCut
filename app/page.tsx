@@ -3,7 +3,7 @@
 import { ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "./editor/icons";
 import { Inspector, InspectorTab } from "./editor/Inspector";
-import { buildFilmstrip, buildThumbnail, probeFile } from "./editor/media";
+import { buildFilmstrip, buildThumbnail, captureFrame, probeFile } from "./editor/media";
 import { defaultTextStyle, rasterizeText, textPresets } from "./editor/text";
 import { computeReframe } from "./editor/reframe";
 import { analysisIssues, captionIssues, HealthIssue } from "./editor/health";
@@ -26,7 +26,8 @@ import { Preview } from "./editor/Preview";
 import { TranscriptPanel } from "./editor/TranscriptPanel";
 import { TranslateModal, TranslateRequest } from "./editor/TranslateModal";
 import { CoverEditor, FrameSource } from "./editor/CoverEditor";
-import { CoverDesign, emptyCover } from "./editor/cover";
+import { CoverDesign, emptyCover, renderCoverImage } from "./editor/cover";
+import { ProjectLibrary, StartScreen } from "./editor/StartScreen";
 import { analyzeCleanCut, CleanCutItem, CleanCutSettings, defaultCleanCutSettings, deriveSentences, silenceItems, timelineTranscript, TranscriptWord, wordsToCuts } from "./editor/transcript";
 import { clampZoom, DropTarget, formatClock, Timeline, TimelineMode, TimelineSettings, TimelineToolbar, Toggles, ToolbarAction } from "./editor/Timeline";
 
@@ -76,6 +77,29 @@ type Recovery = { id: string; title: string; savedAt: string; projectPath: strin
 type RecentProject = { path: string; title: string; openedAt: string; exists: boolean };
 const autosaveInterval = 30_000;
 
+/** Centre-crops a picture to `width × height` and returns it as a JPEG data URL. */
+function fitImage(src: string, width: number, height: number) {
+  return new Promise<string>((resolve) => {
+    const image = new Image();
+    image.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d");
+      if (!ctx || !image.naturalWidth) return resolve("");
+      const scale = Math.max(width / image.naturalWidth, height / image.naturalHeight);
+      const [w, h] = [image.naturalWidth * scale, image.naturalHeight * scale];
+      ctx.fillStyle = "#000";
+      ctx.fillRect(0, 0, width, height);
+      ctx.drawImage(image, (width - w) / 2, (height - h) / 2, w, h);
+      resolve(canvas.toDataURL("image/jpeg", 0.82));
+    };
+    image.onerror = () => resolve("");
+    if (!src.startsWith("data:")) image.crossOrigin = "anonymous";
+    image.src = src;
+  });
+}
+
 function newProjectMeta() {
   return { id: uid("project"), title: t("未命名项目"), createdAt: new Date().toISOString() };
 }
@@ -88,6 +112,8 @@ export default function Home() {
   const [savedFingerprint, setSavedFingerprint] = useState<string | null>(null);
   const [recoveries, setRecoveries] = useState<Recovery[]>([]);
   const [recentProjects, setRecentProjects] = useState<RecentProject[]>([]);
+  const [startOpen, setStartOpen] = useState(true);
+  const [projectLibrary, setProjectLibrary] = useState<ProjectLibrary | null>(null);
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
   const [missingAssets, setMissingAssets] = useState<string[]>([]);
   const [history, setHistory] = useState<History>(() => ({ past: [], present: createProject(), future: [], key: "", at: 0, revision: 1 }));
@@ -1529,7 +1555,7 @@ export default function Home() {
     if (unsaved.length) setToast(t("{count} 个素材没有本地路径，将不会被保存", { count: unsaved.length }));
     const state = editorState();
     try {
-      const result = await window.dashCutDesktop.saveProject({ document: buildDocument(state), projectPath, saveAs });
+      const result = await window.dashCutDesktop.saveProject({ document: { ...buildDocument(state), preview: await projectPreview() }, projectPath, saveAs });
       if (result.canceled || !result.projectPath) return false;
       setProjectPath(result.projectPath);
       setSavedFingerprint(fingerprint);
@@ -1539,6 +1565,37 @@ export default function Home() {
       setToast(error instanceof Error ? t("保存失败：{error}", { error: error.message }) : t("保存失败"));
       return false;
     }
+  }
+
+  /** A small JPEG for the start screen: the designed cover, else the first frame of the main track. */
+  async function projectPreview() {
+    try {
+      const portrait = ratio === "9:16";
+      const [width, height] = portrait ? [270, 480] : [480, 270];
+      if (cover.layers.length) return await renderCoverImage(cover, width, height, "image/jpeg");
+      const clip = trackClips(project, mainTrack(project).id).find((item) => assetMap.get(item.assetId)?.kind !== "audio");
+      const asset = clip && assetMap.get(clip.assetId);
+      if (!clip || !asset) return "";
+      const frame = asset.kind === "video" ? await captureFrame(asset, clip.freezeAt ?? clip.in, 480) : asset.url;
+      return frame ? await fitImage(frame, width, height) : "";
+    } catch {
+      return "";
+    }
+  }
+
+  async function refreshLibrary() {
+    if (!window.dashCutDesktop) return setProjectLibrary({ recent: [], found: [] });
+    try {
+      setProjectLibrary(await window.dashCutDesktop.projectLibrary());
+    } catch {
+      setProjectLibrary({ recent: [], found: [] });
+    }
+  }
+
+  function showStart() {
+    setStartOpen(true);
+    setProjectLibrary(null);
+    void refreshLibrary();
   }
 
   async function refreshRecent() {
@@ -1569,6 +1626,7 @@ export default function Home() {
     setPlatform(state.exportSettings.platform);
     setCover(state.cover);
     setCoverImage("");
+    if (state.cover.layers.length) void renderCoverImage(state.cover, state.ratio === "9:16" ? 540 : 960, state.ratio === "9:16" ? 960 : 540).then(setCoverImage).catch(() => undefined);
     setSelection([]);
     seek(0);
     setMissingAssets(missing);
@@ -1599,6 +1657,7 @@ export default function Home() {
       if (result.canceled || !result.document) return;
       const state = await documentToState(result.document);
       await loadEditorState(state, result.projectPath ?? "", result.missing ?? [], true);
+      setStartOpen(false);
       setToast(result.missing?.length ? t("项目已打开，{count} 个素材需要重新定位", { count: result.missing.length }) : t("已打开「{title}」", { title: state.title }));
     } catch (error) {
       setToast(error instanceof Error ? t("无法打开项目：{error}", { error: error.message }) : t("无法打开项目"));
@@ -1609,8 +1668,9 @@ export default function Home() {
     if (!confirmDiscard()) return;
     if (window.dashCutDesktop) await window.dashCutDesktop.discardRecovery(projectMeta.id);
     const meta = newProjectMeta();
-    await loadEditorState({ ...editorState(), ...meta, ratio: "16:9", project: createProject(), assets: [], captionStyle: defaultSubtitleStyle, captionMode: "both" }, "", [], false);
+    await loadEditorState({ ...editorState(), ...meta, ratio: "16:9", project: createProject(), assets: [], captionStyle: defaultSubtitleStyle, captionMode: "both", cover: emptyCover() }, "", [], false);
     setSavedFingerprint(null);
+    setStartOpen(false);
   }
 
   async function restoreRecovery(item: Recovery) {
@@ -1620,6 +1680,7 @@ export default function Home() {
       const state = await documentToState(payload.document);
       await loadEditorState(state, payload.projectPath, payload.missing, false);
       setRecoveries([]);
+      setStartOpen(false);
       setToast(t("已恢复「{title}」，请保存项目", { title: state.title }));
     } catch (error) {
       setToast(error instanceof Error ? t("恢复失败：{error}", { error: error.message }) : t("恢复失败"));
@@ -1650,6 +1711,8 @@ export default function Home() {
   }
 
   useEffect(() => {
+    // Deferred so the first paint is not followed by a synchronous re-render.
+    void Promise.resolve().then(refreshLibrary);
     if (!window.dashCutDesktop) return;
     void window.dashCutDesktop.recoveryList().then(setRecoveries).catch(() => undefined);
   }, []);
@@ -1749,6 +1812,7 @@ export default function Home() {
         <div className="project-menu">
           <button className="project-menu-button" title={t("项目菜单")} onClick={() => { setProjectMenuOpen(!projectMenuOpen); if (!projectMenuOpen) void refreshRecent(); }}><Icon name="film" size={14} /></button>
           {projectMenuOpen && <div className="project-popover" onMouseLeave={() => setProjectMenuOpen(false)}>
+            <button onClick={() => { setProjectMenuOpen(false); showStart(); }}>{t("开始页")}</button>
             <button onClick={() => { setProjectMenuOpen(false); void newProject(); }}>{t("新建项目")}<kbd>⌘N</kbd></button>
             <button onClick={() => { setProjectMenuOpen(false); void openProject(); }}>{t("打开项目…")}<kbd>⌘O</kbd></button>
             <button onClick={() => { setProjectMenuOpen(false); void saveProject(false); }}>{t("保存")}<kbd>⌘S</kbd></button>
@@ -1870,6 +1934,9 @@ export default function Home() {
       <div className="about-content"><p>{t("面向哔哩哔哩与 YouTube 创作者的视频编辑器。")}</p><div><strong>{t("视频运行时")}</strong><span>FFmpeg 9.0.1 · LGPLv2.1-or-later</span><small>{t("macOS 使用 VideoToolbox，Windows 使用 MediaFoundation。安装包包含许可证、源码地址和实际构建参数。")}</small></div><div><strong>{t("应用许可证")}</strong><span>DashCut · MIT License</span></div><a href="https://github.com/Mikasathebest/DashCut/blob/main/THIRD_PARTY_NOTICES.md" target="_blank" rel="noreferrer">{t("查看第三方声明与对应源码")} ↗</a></div>
     </section></div>}
 
+    {startOpen && <StartScreen library={projectLibrary} desktop={Boolean(projectLibrary && typeof window !== "undefined" && window.dashCutDesktop)} canResume={Boolean(projectPath || project.clips.length || assets.length)}
+      onNew={() => void newProject()} onOpen={(target) => void openProject(target)} onRefresh={() => { setProjectLibrary(null); void refreshLibrary(); }} onResume={() => setStartOpen(false)}
+      onRemove={(target) => void window.dashCutDesktop?.removeRecentProject(target).then(refreshLibrary)} />}
     {recoveries.length > 0 && <div className="modal-backdrop"><section className="about-modal recovery-modal">
       <header><div><span className="eyebrow">RECOVERY</span><h2>{t("发现未保存的项目")}</h2></div></header>
       <div className="about-content"><p>{t("DashCut 上次没有正常关闭，以下项目有自动保存的修改：")}</p>

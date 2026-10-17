@@ -55,6 +55,8 @@ export type ProjectDocument = {
   captionMode: CaptionMode;
   exportSettings: ExportSettings;
   cover: CoverDesign;
+  /** Small JPEG of the cover or first frame, shown on the start screen (written on save, optional). */
+  preview?: string;
 };
 
 export type EditorState = {

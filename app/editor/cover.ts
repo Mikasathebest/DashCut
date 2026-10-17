@@ -214,3 +214,21 @@ export function drawCover(ctx: CanvasRenderingContext2D, design: CoverDesign, wi
     } else if (layer.text) drawText(ctx, layer, width, height);
   }
 }
+
+/** Renders a design off-screen once its pictures have loaded; returns "" for an empty design. */
+export async function renderCoverImage(design: CoverDesign, width: number, height: number, type = "image/png") {
+  if (!design.layers.length) return "";
+  const sources = [...new Set(design.layers.flatMap((layer) => layer.kind === "image" ? [layer.src] : []))];
+  const images = new Map(await Promise.all(sources.map((src) => new Promise<[string, HTMLImageElement]>((resolve) => {
+    const image = new Image();
+    image.onload = image.onerror = () => resolve([src, image]);
+    image.src = src;
+  }))));
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return "";
+  drawCover(ctx, design, width, height, images);
+  return canvas.toDataURL(type, 0.85);
+}

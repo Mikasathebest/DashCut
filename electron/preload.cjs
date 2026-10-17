@@ -38,6 +38,7 @@ contextBridge.exposeInMainWorld("dashCutDesktop", {
   saveProject: (request) => ipcRenderer.invoke("project:save", request),
   openProject: (projectPath) => ipcRenderer.invoke("project:open", projectPath),
   recentProjects: () => ipcRenderer.invoke("project:recent"),
+  projectLibrary: () => ipcRenderer.invoke("project:library"),
   removeRecentProject: (projectPath) => ipcRenderer.invoke("project:recent-remove", projectPath),
   autosaveProject: (request) => ipcRenderer.invoke("project:autosave", request),
   recoveryList: () => ipcRenderer.invoke("project:recovery-list"),

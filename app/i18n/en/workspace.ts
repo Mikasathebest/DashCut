@@ -385,6 +385,25 @@ const en: Record<string, string> = {
   "加密保存在本机钥匙串，下次自动填入": "Encrypted in the system keychain and filled in next time",
   "隐藏": "Hide",
   "显示": "Show",
+  // Start screen
+  "今天 {time}": "Today {time}",
+  "昨天": "Yesterday",
+  "{count} 天前": "{count} days ago",
+  "文件已移动或删除": "File was moved or deleted",
+  "空项目": "Empty project",
+  "从最近项目中移除": "Remove from recent projects",
+  "返回当前项目": "Back to current project",
+  "从空白时间轴开始，导入视频、图片和音频": "Start from an empty timeline and import video, images and audio",
+  "选择或拖入 .dashcut 文件": "Choose or drop a .dashcut file",
+  "还没有打开过的项目。新建一个开始剪辑吧。": "No projects opened yet. Create one to start editing.",
+  "正在读取…": "Loading…",
+  "可导入的项目": "Projects you can open",
+  "重新查找": "Search again",
+  "在影片、文稿、桌面、下载以及最近项目所在的文件夹中找到的 .dashcut 文件": ".dashcut files found in Movies, Documents, Desktop, Downloads and the folders of recent projects",
+  "没有找到其他 .dashcut 项目。": "No other .dashcut projects found.",
+  "正在查找…": "Searching…",
+  "松开以打开项目": "Drop to open the project",
+  "开始页": "Start screen",
 };
 
 export default en;

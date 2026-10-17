@@ -12,6 +12,8 @@ declare global {
     | { type: "tool-result"; id: string; name: string; result: unknown }
     | { type: "error"; message: string }
   );
+  /** One card on the start screen; `missing` entries are recent files that were moved or deleted. */
+  type ProjectSummary = { path: string; title: string; openedAt?: string; modifiedAt?: string; ratio?: "16:9" | "9:16"; duration?: number; clipCount?: number; preview?: string; missing?: boolean };
   type HardwareTier = "unsupported" | "minimum" | "recommended";
 
   /*
@@ -204,6 +206,7 @@ declare global {
       saveProject(request: { document: unknown; projectPath: string; saveAs: boolean }): Promise<{ canceled?: boolean; projectPath?: string }>;
       openProject(projectPath?: string): Promise<{ canceled?: boolean; projectPath?: string; document?: unknown; missing?: string[] }>;
       recentProjects(): Promise<Array<{ path: string; title: string; openedAt: string; exists: boolean }>>;
+      projectLibrary(): Promise<{ recent: ProjectSummary[]; found: ProjectSummary[] }>;
       removeRecentProject(projectPath: string): Promise<unknown>;
       autosaveProject(request: { document: unknown; projectPath: string }): Promise<void>;
       recoveryList(): Promise<Array<{ id: string; title: string; savedAt: string; projectPath: string }>>;
