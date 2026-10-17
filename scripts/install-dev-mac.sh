@@ -39,14 +39,11 @@ if [[ -z "${skip_build:-}" ]]; then
   npx electron-builder --mac dir --arm64 --publish never -c.mac.notarize=false -c.extraMetadata.version="$version"
 fi
 
-# A running DashCut with unsaved work shows a save prompt instead of quitting; never wait on it forever.
+# Ask DashCut to quit; a save prompt can block that, so force-kill anything still running.
+# This is a dev reinstall, so unsaved changes in the running copy are discarded on purpose.
 osascript -e 'tell application "DashCut" to quit' 2>/dev/null || true
-for _ in $(seq 1 60); do pgrep -xq DashCut || break; sleep 0.5; done
-if pgrep -xq DashCut; then
-  echo "DashCut is still open (probably asking to save changes). Save or close it, then run:" >&2
-  echo "  DASHCUT_INSTALL_ONLY=1 npm run install:dev-mac" >&2
-  exit 2
-fi
+for _ in $(seq 1 6); do pgrep -xq DashCut || break; sleep 0.5; done
+pgrep -xq DashCut && { echo "Force-quitting DashCut (discarding its unsaved changes)"; pkill -9 -x DashCut || true; sleep 1; }
 rm -rf "$app"
 ditto release/mac-arm64/DashCut.app "$app"
 echo "Installed DashCut $version to $app"
