@@ -151,3 +151,15 @@ test("pruning drops empty overlay tracks but keeps ones added by hand", () => {
   assert.ok(ids.includes(manual.trackId));
   assert.ok(!ids.includes(auto.trackId));
 });
+
+test("placement edits change the static transform, or add a keyframe when the property is animated", async () => {
+  const { placementAt, placementPatch } = await import("../app/editor/model.ts");
+  const clip = { ...createClip(asset("a"), "main", 2), transform: { x: 0, y: 0, scale: 1, rotation: 0, opacity: 1 } };
+  assert.deepEqual(placementPatch(clip, 3, { x: 0.2, scale: 0.5 }), { transform: { ...clip.transform, x: 0.2, scale: 0.5 } });
+  const keyed = { ...clip, keyframes: { scale: [{ time: 0, value: 1, easing: "linear" }, { time: 4, value: 2, easing: "linear" }] } };
+  assert.equal(placementAt(keyed, 4).scale, 1.5);
+  const patch = placementPatch(keyed, 4, { scale: 0.8, y: -0.1 });
+  assert.equal(patch.transform.y, -0.1);
+  assert.equal(patch.transform.scale, 1);
+  assert.deepEqual(patch.keyframes.scale.map((point) => [point.time, point.value]), [[0, 1], [2, 0.8], [4, 2]]);
+});

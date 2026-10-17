@@ -171,7 +171,7 @@ type DragState =
   | { type: "scrub" }
   | { type: "marquee"; x0: number; y0: number; x1: number; y1: number; additive: boolean }
   | { type: "volume"; clipId: string; pointerY: number; origin: number; laneHeight: number; volume: number }
-  | { type: "caption"; id: number; edge: "left" | "right" | null; pointerX: number; start: number; end: number; moved: boolean };
+  | { type: "caption"; id: number; edge: "left" | "right" | null; pointerX: number; start: number; end: number; moved: boolean; /** Set when the caption was already selected: a click without dragging edits this row. */ editLang: "zh" | "en" | null };
 
 type TimelineProps = {
   project: Project;
@@ -203,6 +203,8 @@ type TimelineProps = {
   onTransition: (clipId: string) => void;
   subtitleMode: SubtitleMode;
   selectedSubtitles: number[];
+  /** "id:lang" for captions whose other language is being re-translated. */
+  syncingSubtitles?: string[];
   onSelectSubtitle: (id: number | null, additive?: boolean) => void;
   onSubtitleChange: (id: number, patch: Partial<Pick<Subtitle, "start" | "end" | "zh" | "en">>) => void;
   onAddSubtitle: (time: number) => number;
@@ -214,7 +216,7 @@ export function Timeline(props: TimelineProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [drag, setDrag] = useState<DragState | null>(null);
   const [assetDrop, setAssetDrop] = useState<{ target: DropTarget; start: number } | null>(null);
-  const [editingCaption, setEditingCaption] = useState<number | null>(null);
+  const [editingCaption, setEditingCaption] = useState<{ id: number; lang: "zh" | "en" } | null>(null);
   const dragRef = useRef<DragState | null>(null);
   const propsRef = useRef(props);
   // Window-level pointer handlers read the latest drag state and callbacks through refs.
@@ -361,6 +363,7 @@ export function Timeline(props: TimelineProps) {
       }
       if (state.type === "caption") {
         if (state.moved) propsRef.current.onSubtitleChange(state.id, { start: state.start, end: state.end });
+        else if (state.editLang) setEditingCaption({ id: state.id, lang: state.editLang });
         return;
       }
       if (state.type === "move" && state.moved) propsRef.current.onMoveClip(state.clipId, state.target, state.start);
@@ -508,15 +511,16 @@ export function Timeline(props: TimelineProps) {
     return { ...state, moved, start, end: start + length };
   }
 
-  function startCaptionPointer(event: ReactPointerEvent, subtitle: Subtitle) {
-    if (event.button !== 0 || editingCaption === subtitle.id) return;
+  function startCaptionPointer(event: ReactPointerEvent, subtitle: Subtitle, lang: "zh" | "en") {
+    if (event.button !== 0 || editingCaption?.id === subtitle.id) return;
     event.stopPropagation();
     const additive = event.shiftKey || event.metaKey || event.ctrlKey;
+    const wasSelected = props.selectedSubtitles.length === 1 && props.selectedSubtitles[0] === subtitle.id;
     props.onSelectSubtitle(subtitle.id, additive);
     if (additive) return;
     const edge = (event.target as HTMLElement).dataset.edge as "left" | "right" | undefined;
     if (!edge) props.onSeek(subtitle.start + 0.01);
-    beginDrag({ type: "caption", id: subtitle.id, edge: edge ?? null, pointerX: event.clientX, start: subtitle.start, end: subtitle.end, moved: false });
+    beginDrag({ type: "caption", id: subtitle.id, edge: edge ?? null, pointerX: event.clientX, start: subtitle.start, end: subtitle.end, moved: false, editLang: wasSelected && !edge ? lang : null });
   }
 
   // Chinese and English captions share timing, so both rows move together when either is dragged.
@@ -526,7 +530,7 @@ export function Timeline(props: TimelineProps) {
       <div className="track-header"><span className="track-name"><Icon name="text" size={12} />{lang === "zh" ? t("中文字幕") : "English"}</span></div>
       <i className="track-lead" />
       <div className="track-lane" style={{ width: contentWidth }} onPointerDown={(event) => { if (event.button !== 0) return; props.onSelectSubtitle(null); scrubFrom(event); }}
-        onDoubleClick={(event) => { if (event.target !== event.currentTarget) return; setEditingCaption(props.onAddSubtitle(timeFromClientX(event.clientX))); }}>
+        onDoubleClick={(event) => { if (event.target !== event.currentTarget) return; setEditingCaption({ id: props.onAddSubtitle(timeFromClientX(event.clientX)), lang }); }}>
         {subtitles.map((subtitle) => {
           const dragged = drag?.type === "caption" && drag.id === subtitle.id ? drag : null;
           const start = dragged ? dragged.start : subtitle.start;
@@ -534,16 +538,18 @@ export function Timeline(props: TimelineProps) {
           const width = Math.max(3, (end - start) * zoom);
           const field = lang;
           const selected = props.selectedSubtitles.includes(subtitle.id);
-          return <div key={subtitle.id} className={`timeline-caption${selected ? " selected" : ""}${time >= subtitle.start && time < subtitle.end ? " live" : ""}`} style={{ left: start * zoom, width }} title={`${subtitle.zh}${subtitle.zh && subtitle.en ? "\n" : ""}${subtitle.en}\n${t("双击编辑 · 拖动调整时间")}`}
-            onPointerDown={(event) => startCaptionPointer(event, subtitle)}
-            onDoubleClick={(event) => { event.stopPropagation(); setEditingCaption(subtitle.id); }}>
-            {editingCaption === subtitle.id
+          const editing = editingCaption?.id === subtitle.id && editingCaption.lang === lang;
+          const syncing = props.syncingSubtitles?.includes(`${subtitle.id}:${lang}`);
+          return <div key={subtitle.id} className={`timeline-caption${selected ? " selected" : ""}${syncing ? " syncing" : ""}${time >= subtitle.start && time < subtitle.end ? " live" : ""}`} style={{ left: start * zoom, width }} title={`${subtitle.zh}${subtitle.zh && subtitle.en ? "\n" : ""}${subtitle.en}\n${t("单击选中后再单击编辑 · 拖动调整时间")}`}
+            onPointerDown={(event) => startCaptionPointer(event, subtitle, lang)}
+            onDoubleClick={(event) => { event.stopPropagation(); setEditingCaption({ id: subtitle.id, lang }); }}>
+            {editing
               ? <input autoFocus defaultValue={subtitle[field]} aria-label={t("编辑字幕")}
                 onPointerDown={(event) => event.stopPropagation()}
                 onKeyDown={(event) => { event.stopPropagation(); if (event.key === "Enter") event.currentTarget.blur(); if (event.key === "Escape") { event.currentTarget.value = subtitle[field]; event.currentTarget.blur(); } }}
                 onBlur={(event) => { setEditingCaption(null); if (event.currentTarget.value !== subtitle[field]) props.onSubtitleChange(subtitle.id, { [field]: event.currentTarget.value }); }} />
               : width > 18 && <span>{subtitle[field] || (lang === "en" ? t("（未翻译）") : "")}</span>}
-            {width > 10 && editingCaption !== subtitle.id && <><i className="clip-edge left" data-edge="left" /><i className="clip-edge right" data-edge="right" /></>}
+            {width > 10 && !editing && <><i className="clip-edge left" data-edge="left" /><i className="clip-edge right" data-edge="right" /></>}
           </div>;
         })}
         {!subtitles.length && lang === "zh" && <span className="lane-hint">{t("识别字幕后显示在这里，双击可编辑")}</span>}

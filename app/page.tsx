@@ -14,7 +14,7 @@ import { buildDocument, EditorState, migrateDocument, ProjectDocument, readDocum
 import {
   addTrack, Asset, Clip, clipAt, clipDuration, clipEnd, createClip, defaultClipSettings, deleteClips, EditOptions, freezeFrame, hasRoom,
   cutSourceRanges, mainTrack, placeClip, Project, projectDuration, pruneTracks, sourceRangeToTimeline, sourceTimeAt, splitAtSourceTimes, splitClip,
-  Subtitle, TextLayer, TimedWord, toComposition, canvasSize, trackClips, Transcript, trimAt, uid, updateClip, createProject,
+  Subtitle, TextLayer, TimedWord, toComposition, canvasSize, trackClips, Transcript, trimAt, uid, updateClip, createProject, placementPatch,
 } from "./editor/model";
 import { bestAudioModel, defaultSubtitleStyle, normalizeSubtitleStyle, shiftSubtitles, SubtitleStyle } from "./editor/captions";
 import { CaptionStyleEditor, CaptionTimingBar } from "./editor/CaptionTools";
@@ -38,6 +38,15 @@ type History = { past: Project[]; present: Project; future: Project[]; key: stri
 
 // Endpoint and model are remembered in localStorage; the API key is kept encrypted by the main process.
 const aiSettingsKey = "dashcut.ai-settings";
+// Re-translating the other language after a caption edit, with its own (fast) model.
+const captionSyncKey = "dashcut.caption-sync";
+type CaptionSyncSettings = { enabled: boolean; model: string };
+function savedCaptionSync(): CaptionSyncSettings {
+  try {
+    const saved = JSON.parse(localStorage.getItem(captionSyncKey) || "{}");
+    return { enabled: saved.enabled !== false, model: typeof saved.model === "string" ? saved.model : "" };
+  } catch { return { enabled: true, model: "" }; }
+}
 function savedAiSettings() {
   try {
     const saved = JSON.parse(localStorage.getItem(aiSettingsKey) || "{}");
@@ -174,6 +183,9 @@ export default function Home() {
   const [selectedModel, setSelectedModel] = useState<LocalModelInfo["id"]>("small");
   const [installingModel, setInstallingModel] = useState<string>("");
   const [aiConfig, setAiConfig] = useState<AiConfig>({ baseUrl: "", apiKey: "", model: "" });
+  const [captionSync, setCaptionSync] = useState<CaptionSyncSettings>({ enabled: true, model: "" });
+  const [syncingCaptions, setSyncingCaptions] = useState<string[]>([]);
+  const captionSyncHinted = useRef(false);
   const [aiModels, setAiModels] = useState<AiModel[]>([]);
   const [loadingAiModels, setLoadingAiModels] = useState(false);
   const [aiKeyLoaded, setAiKeyLoaded] = useState(false);
@@ -261,6 +273,7 @@ export default function Home() {
     // Restored after mount so server and client render the same initial markup.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setAiConfig((config) => ({ ...config, ...saved }));
+    setCaptionSync(savedCaptionSync());
     void window.dashCutDesktop?.savedAiKey?.().then((apiKey) => {
       if (apiKey) setAiConfig((config) => ({ ...config, apiKey }));
       setAiKeyLoaded(true);
@@ -280,6 +293,11 @@ export default function Home() {
     autoModelTried.current = true;
     void refreshAiModels();
   });
+
+  useEffect(() => {
+    try { localStorage.setItem(captionSyncKey, JSON.stringify(captionSync)); }
+    catch { /* storage unavailable */ }
+  }, [captionSync]);
 
   useEffect(() => {
     try { localStorage.setItem(aiSettingsKey, JSON.stringify({ baseUrl: aiConfig.baseUrl, model: aiConfig.model })); }
@@ -925,6 +943,45 @@ export default function Home() {
 
   function setSubtitles(subtitles: Subtitle[], key = "") {
     commit((state) => ({ ...state, subtitles }), key);
+  }
+
+  /** Applies a caption edit; a text change re-translates the other language in the background. */
+  function changeSubtitle(id: number, patch: Partial<Subtitle>) {
+    const before = project.subtitles.find((item) => item.id === id);
+    setSubtitles(project.subtitles.map((item) => item.id === id ? { ...item, ...patch } : item).sort((a, b) => a.start - b.start));
+    const lang = typeof patch.zh === "string" ? "zh" : typeof patch.en === "string" ? "en" : null;
+    if (before && lang && patch[lang] !== before[lang]) void syncCaptionTranslation(id, lang, patch[lang]!);
+  }
+
+  async function syncCaptionTranslation(id: number, lang: "zh" | "en", text: string) {
+    const desktop = window.dashCutDesktop;
+    if (!captionSync.enabled || !desktop || !text.trim()) return;
+    const model = captionSync.model.trim() || aiConfig.model.trim();
+    if (!aiConfig.baseUrl.trim() || !aiConfig.apiKey.trim() || !model) {
+      if (!captionSyncHinted.current) setToast(t("在字幕面板填写 API 设置后，编辑字幕会自动翻译另一种语言"));
+      captionSyncHinted.current = true;
+      return;
+    }
+    const other = lang === "zh" ? "en" : "zh";
+    const sorted = [...project.subtitles].sort((a, b) => a.start - b.start);
+    const index = sorted.findIndex((item) => item.id === id);
+    const tag = `${id}:${other}`;
+    setSyncingCaptions((items) => [...items, tag]);
+    try {
+      const result = await desktop.syncCaption({ config: aiConfig, model, source: lang, text,
+        before: sorted.slice(Math.max(0, index - 2), Math.max(0, index)).map((item) => item[lang]),
+        after: sorted.slice(index + 1, index + 3).map((item) => item[lang]) });
+      // Skipped when the edited line changed again meanwhile; that newer edit brings its own translation.
+      commit((state) => {
+        const current = state.subtitles.find((item) => item.id === id);
+        if (!current || current[lang] !== text || current[other] === result.text) return state;
+        return { ...state, subtitles: state.subtitles.map((item) => item.id === id ? { ...item, [other]: result.text } : item) };
+      });
+    } catch (error) {
+      setToast(t("自动翻译失败：{error}", { error: error instanceof Error ? error.message : String(error) }));
+    } finally {
+      setSyncingCaptions((items) => items.filter((item) => item !== tag));
+    }
   }
 
   /* ------------------------------------------------------------ voice / background separation */
@@ -1783,6 +1840,8 @@ export default function Home() {
       <label>API Base URL<input value={aiConfig.baseUrl} placeholder="https://…/v1" disabled={isGenerating || loadingAiModels} onChange={(event) => { setAiModels([]); setAiConfig({ ...aiConfig, baseUrl: event.target.value }); }} /></label>
       <label>API Key<span className="model-picker"><input type={showAiKey ? "text" : "password"} autoComplete="off" spellCheck={false} value={aiConfig.apiKey} disabled={isGenerating || loadingAiModels} onChange={(event) => setAiConfig({ ...aiConfig, apiKey: event.target.value })} placeholder={t("加密保存在本机钥匙串，下次自动填入")} /><button className="ghost-action" type="button" onClick={() => setShowAiKey(!showAiKey)}>{showAiKey ? t("隐藏") : t("显示")}</button></span></label>
       <label>{t("模型")}<span className="model-picker"><input list="ai-models" value={aiConfig.model} placeholder={t("选择或输入模型 ID")} disabled={isGenerating} onChange={(event) => setAiConfig({ ...aiConfig, model: event.target.value })} /><button className="ghost-action" disabled={loadingAiModels || isGenerating} onClick={() => void refreshAiModels()}>{loadingAiModels ? t("查询中…") : aiModels.length ? t("刷新 ({count})", { count: aiModels.length }) : t("查询")}</button></span><datalist id="ai-models">{aiModels.map((model) => <option key={model.id} value={model.id} />)}</datalist></label>
+      <label>{t("快速模型 · 编辑字幕后自动翻译")}<input list="ai-models" value={captionSync.model} placeholder={aiConfig.model || t("留空则使用上面的模型")} onChange={(event) => setCaptionSync({ ...captionSync, model: event.target.value })} /></label>
+      <label className="ai-checkbox"><input type="checkbox" checked={captionSync.enabled} onChange={(event) => setCaptionSync({ ...captionSync, enabled: event.target.checked })} />{t("编辑一种语言后自动更新另一种（关闭思考，更快）")}</label>
       {recognitionEngine === "local" && <label className="ai-checkbox"><input type="checkbox" checked={autoTranslate} disabled={isGenerating} onChange={(event) => setAutoTranslate(event.target.checked)} />{t("识别后自动生成中英译文")}</label>}
       <small>{recognitionEngine === "cloud" ? t("云端识别会上传音轨，需选择支持音频输入的模型。") : autoTranslate ? t("本地识别后仅将字幕文本发送到接口翻译。") : t("关闭自动翻译时，本地识别完全离线。")}</small>
       <button className="ghost-action" disabled={isGenerating || !project.subtitles.length} onClick={() => void translateExistingSubtitles()}>{t("翻译当前字幕 · 保留时间戳")}</button>
@@ -1839,7 +1898,11 @@ export default function Home() {
 
       <section className="stage">
         <div className="stage-toolbar"><span>{busy || (hoverTime !== null && toggles.previewAxis && !playing ? t("预览轴 {time}", { time: formatClock(hoverTime) }) : "")}</span><div className="stage-actions"><button className="ghost-action reframe-button" title={t("跟随人脸自动裁切为竖屏")} onClick={() => setReframeOpen(true)}>✦ {t("智能转竖屏")}</button><div className="segmented ratio-switch"><button className={ratio === "16:9" ? "active" : ""} onClick={() => setRatio("16:9")}>{t("16:9 横屏")}</button><button className={ratio === "9:16" ? "active" : ""} onClick={() => setRatio("9:16")}>{t("9:16 竖屏")}</button></div></div></div>
-        <Preview project={project} assets={assetMap} time={previewTime} rate={playing ? shuttle : 0} muted={muted} ratio={ratio} subtitleMode={subtitleMode} subtitleStyle={subtitleStyle} stemUrls={stemUrls} onImport={() => fileInputRef.current?.click()} />
+        <Preview project={project} assets={assetMap} time={previewTime} rate={playing ? shuttle : 0} muted={muted} ratio={ratio} subtitleMode={subtitleMode} subtitleStyle={subtitleStyle} stemUrls={stemUrls} onImport={() => fileInputRef.current?.click()}
+          selection={selection} syncingCaptions={syncingCaptions} onInteract={() => setPlaying(false)}
+          onSelectClip={(clipId) => { setSelection(clipId ? [clipId] : []); if (clipId) setSelectedSubtitles([]); }}
+          onPlacement={(clipId, values, key) => commit((state) => ({ ...state, clips: state.clips.map((clip) => clip.id === clipId ? { ...clip, ...placementPatch(clip, previewTime, values) } : clip) }), key)}
+          onCaptionChange={(id, lang, text) => changeSubtitle(id, { [lang]: text })} />
         <div className="player-controls"><span>{formatClock(current, true, exportFps)} <i>/ {formatClock(duration, true, exportFps)}</i>{playing && shuttle !== 1 && <em className="shuttle-badge">{shuttle > 0 ? "▶" : "◀"} {Math.abs(shuttle)}×</em>}</span><div><button title={t("回到开头")} onClick={() => seek(0)}><Icon name="prev" size={14} /></button><button data-play-toggle className="play" onClick={togglePlay} title={t("播放 / 暂停（空格）")}><Icon name={playing ? "pause" : "play"} size={14} /></button><button title={t("跳到结尾")} onClick={() => seek(duration)}><Icon name="next" size={14} /></button></div><div><LoudnessMeter active={playing && !muted} target={loudnessTarget} /><button title={muted ? t("取消静音") : t("静音预览")} onClick={() => setMuted(!muted)}><Icon name={muted ? "mute" : "volume"} size={15} /></button><button title={t("全屏预览")} onClick={() => void document.querySelector(".video-frame")?.requestFullscreen()}><Icon name="fullscreen" size={14} /></button></div></div>
       </section>
 
@@ -1883,7 +1946,7 @@ export default function Home() {
           setSelectedSubtitle(id);
           return id;
         }}
-        onSubtitleChange={(id, patch) => setSubtitles(project.subtitles.map((item) => item.id === id ? { ...item, ...patch } : item).sort((a, b) => a.start - b.start))} />
+        syncingSubtitles={syncingCaptions} onSubtitleChange={changeSubtitle} />
     </section>
 
     {typeof recording === "number" && <div className="countdown-overlay"><span>{recording}</span><small>{t("即将开始录音")}</small></div>}

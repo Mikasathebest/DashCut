@@ -49,7 +49,7 @@ const en: Record<string, string> = {
   "文本": "Text",
   "当前预览与导出未显示此语言": "This language is hidden in the preview and export",
   "中文字幕": "Chinese captions",
-  "双击编辑 · 拖动调整时间": "Double-click to edit · drag to retime",
+  "单击选中后再单击编辑 · 拖动调整时间": "Click to select, click again to edit · drag to retime",
   "编辑字幕": "Edit caption",
   "（未翻译）": "(not translated)",
   "识别字幕后显示在这里，双击可编辑": "Captions appear here after transcription; double-click to edit",
@@ -347,6 +347,14 @@ const en: Record<string, string> = {
   "已删除 {count} 条字幕": "Deleted {count} captions",
   "已选中全部 {count} 条字幕，按 ⌫ 删除": "Selected all {count} captions — press ⌫ to delete",
   "还没有字幕": "No captions yet",
+  // Direct editing in the preview and caption sync
+  "点击编辑字幕": "Click to edit the caption",
+  "拖动缩放": "Drag to resize",
+  "在字幕面板填写 API 设置后，编辑字幕会自动翻译另一种语言": "Fill in the API settings in the captions panel and edited captions will be translated into the other language automatically",
+  "自动翻译失败：{error}": "Automatic translation failed: {error}",
+  "快速模型 · 编辑字幕后自动翻译": "Fast model · translate after caption edits",
+  "留空则使用上面的模型": "Leave empty to use the model above",
+  "编辑一种语言后自动更新另一种（关闭思考，更快）": "Update the other language after an edit (thinking off, faster)",
 };
 
 export default en;

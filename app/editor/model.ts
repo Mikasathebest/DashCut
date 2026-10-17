@@ -1,5 +1,5 @@
 // Pure project model and timeline operations shared by the editor UI and its tests.
-import { curveAt, evaluateKeyframes, meanSpeed, outputFractionForSource, curveIntegral, shiftKeyframes, sliceCurve } from "./motion.ts";
+import { curveAt, evaluateKeyframes, meanSpeed, outputFractionForSource, curveIntegral, setKeyframe, shiftKeyframes, sliceCurve } from "./motion.ts";
 import type { SpeedPoint } from "./motion.ts";
 
 /** "text" assets are placeholders for title clips; the content lives on the clip. */
@@ -433,6 +433,32 @@ export function evaluateVisual(clip: Clip, time: number) {
   if (clip.animationIn.type !== "none" && local < inLength) apply(clip.animationIn.type, Math.max(0, local / inLength));
   if (clip.animationOut.type !== "none" && local > length - outLength) apply(clip.animationOut.type, Math.max(0, (length - local) / outLength));
   return { x, y, scale, rotation, opacity: Math.max(0, Math.min(1, opacity)), wipe: wipe as { from: "left" | "right"; visible: number } | null };
+}
+
+type PlacementProperty = "x" | "y" | "scale";
+
+/** Position and scale at a timeline time from keyframes or the static transform, without in/out animations. */
+export function placementAt(clip: Clip, time: number): Record<PlacementProperty, number> {
+  const local = time - clip.start;
+  const keyframes = clip.keyframes ?? {};
+  return {
+    x: evaluateKeyframes(keyframes.x, local, clip.transform.x),
+    y: evaluateKeyframes(keyframes.y, local, clip.transform.y),
+    scale: evaluateKeyframes(keyframes.scale, local, clip.transform.scale),
+  };
+}
+
+/** Patch that sets position/scale at `time`: keyed properties get a keyframe at the playhead, the rest change statically. */
+export function placementPatch(clip: Clip, time: number, values: Partial<Record<PlacementProperty, number>>): Partial<Clip> {
+  const local = Math.max(0, Math.min(clipDuration(clip), time - clip.start));
+  let transform = clip.transform;
+  let keyframes = clip.keyframes;
+  for (const [property, value] of Object.entries(values) as Array<[PlacementProperty, number]>) {
+    const points = keyframes?.[property];
+    if (points?.length) keyframes = { ...keyframes, [property]: setKeyframe(points, local, value) };
+    else transform = { ...transform, [property]: value };
+  }
+  return { transform, ...(keyframes === clip.keyframes ? {} : { keyframes }) };
 }
 
 /** Volume after fades at a timeline time. */

@@ -6,7 +6,7 @@ import path from "node:path";
 import test from "node:test";
 
 const require = createRequire(import.meta.url);
-const { isSilentWav, listModels, repairAudioSegments, transcribeCloud, translateSubtitles, wavDuration } = require("../electron/ai-api.cjs");
+const { isSilentWav, listModels, repairAudioSegments, syncCaption, transcribeCloud, translateSubtitles, wavDuration } = require("../electron/ai-api.cjs");
 const MODEL = "example/chat-model";
 const config = { baseUrl: "https://api.example.com/v1", apiKey: "test-secret", model: MODEL };
 const captions = [{ id: 5, start: 2.125, end: 4.625, zh: "今天测试字幕，let's start.", en: "" }, { id: 8, start: 7.1, end: 8.9, zh: "", en: "The meeting starts at three." }];
@@ -165,4 +165,36 @@ test("cleans extracted audio when inference fails", async () => {
     }), /500/);
     assert.deepEqual(await readdir(tempPath), ["source.wav"]);
   } finally { await rm(tempPath, { recursive: true, force: true }); }
+});
+
+test("syncs one edited caption with the fast model and thinking turned off", async () => {
+  const bodies = [];
+  const result = await syncCaption({ config, model: "example/fast", source: "zh", text: "我们出发吧", before: ["早上好"], after: [] }, { fetchImpl: async (_url, request) => {
+    bodies.push(JSON.parse(request.body));
+    return completion({ text: "Let's go." });
+  } });
+  assert.deepEqual(result, { text: "Let's go." });
+  assert.equal(bodies[0].model, "example/fast");
+  assert.equal(bodies[0].reasoning_effort, "minimal");
+  assert.equal(bodies[0].chat_template_kwargs.enable_thinking, false);
+  assert.match(bodies[0].messages[0].content, /natural English/);
+  assert.match(bodies[0].messages[0].content, /早上好/);
+});
+
+test("retries without the thinking hints when the server rejects them, and remembers that", async () => {
+  const bodies = [];
+  const fetchImpl = async (_url, request) => {
+    const body = JSON.parse(request.body);
+    bodies.push(body);
+    return "reasoning_effort" in body ? new Response("{}", { status: 400 }) : completion({ text: "我们走吧。" });
+  };
+  const strict = { ...config, baseUrl: "https://strict.example.com/v1" };
+  assert.deepEqual(await syncCaption({ config: strict, source: "en", text: "Let's go." }, { fetchImpl, retryDelayMs: 0 }), { text: "我们走吧。" });
+  assert.deepEqual(bodies.map((body) => "reasoning_effort" in body), [true, false]);
+  assert.match(bodies[1].messages[0].content, /Simplified Chinese/);
+  assert.equal(bodies[1].model, MODEL);
+  await syncCaption({ config: strict, source: "en", text: "Again." }, { fetchImpl, retryDelayMs: 0 });
+  assert.equal(bodies.length, 3);
+  assert.equal("reasoning_effort" in bodies[2], false);
+  await assert.rejects(syncCaption({ config, source: "fr", text: "x" }, { fetchImpl }));
 });

@@ -673,3 +673,22 @@ button { cursor: pointer; }
 .project-card:hover .project-card-remove, .project-card.missing .project-card-remove, .project-card-remove:focus-visible { opacity: 1; }
 .start-drop { position: fixed; inset: 14px; display: grid; place-items: center; border: 2px dashed var(--blue); border-radius: 18px; background: rgba(12, 14, 19, .82); color: white; font-size: 18px; font-weight: 700; pointer-events: none; }
 @media (max-width: 720px) { .start-inner { padding: 20px 16px 40px; } .start-hero { grid-template-columns: 1fr; } .start-new strong { font-size: 22px; } }
+
+/* Direct manipulation in the preview */
+.preview-layer.movable { cursor: move; touch-action: none; }
+.preview-selection { position: absolute; z-index: 3; transform-origin: center; outline: 1.5px solid var(--blue-2); box-shadow: 0 0 0 1px rgba(0,0,0,.35); pointer-events: none; }
+.preview-handle { position: absolute; width: 12px; height: 12px; border: 1.5px solid var(--blue-2); border-radius: 3px; background: #fff; pointer-events: auto; touch-action: none; }
+.preview-handle.nw { left: 0; top: 0; cursor: nwse-resize; }
+.preview-handle.ne { right: 0; top: 0; cursor: nesw-resize; }
+.preview-handle.sw { left: 0; bottom: 0; cursor: nesw-resize; }
+.preview-handle.se { right: 0; bottom: 0; cursor: nwse-resize; }
+.preview-guide { position: absolute; z-index: 3; background: #ff5ca8; pointer-events: none; }
+.preview-guide.vertical { left: 50%; top: 0; bottom: 0; width: 1px; }
+.preview-guide.horizontal { top: 50%; left: 0; right: 0; height: 1px; }
+.video-frame .caption-preview { z-index: 4; }
+.caption-preview .caption-line.editable { pointer-events: auto; cursor: text; }
+.caption-preview .caption-line.editable:hover { outline: 1px dashed rgba(255,255,255,.55); outline-offset: 2px; }
+.caption-preview .caption-line.editing { outline: 1.5px solid var(--blue-2); outline-offset: 2px; cursor: text; caret-color: var(--blue-2); }
+.caption-preview .caption-line.syncing { opacity: .55; }
+.timeline-caption.syncing { animation: caption-sync 1s ease-in-out infinite alternate; }
+@keyframes caption-sync { from { opacity: 1; } to { opacity: .45; } }

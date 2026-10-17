@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld("dashCutDesktop", {
   saveAiKey: (key) => ipcRenderer.invoke("ai:save-key", key),
   nativeEdit: (command) => ipcRenderer.invoke("edit:native", command),
   translateSubtitles: (request) => ipcRenderer.invoke("ai:translate", request),
+  syncCaption: (request) => ipcRenderer.invoke("ai:sync-caption", request),
   transcribeCloud: (request) => ipcRenderer.invoke("ai:transcribe", request),
   exportVideo: (request) => ipcRenderer.invoke("export:video", request),
   revealExport: (target) => ipcRenderer.invoke("export:reveal", target),

@@ -27,7 +27,7 @@ let closeConfirmed = false;
 const recent = () => createRecentList(path.join(app.getPath("userData"), "recent-projects.json"));
 const autosave = () => createAutosave(path.join(app.getPath("userData"), "autosave"));
 const projectFilters = () => [{ name: tr("DashCut 项目"), extensions: ["dashcut"] }];
-const { listModels, translateSubtitles, transcribeCloud } = require("./ai-api.cjs");
+const { listModels, syncCaption, translateSubtitles, transcribeCloud } = require("./ai-api.cjs");
 
 let desktopServer;
 
@@ -89,6 +89,7 @@ ipcMain.handle("ai:save-key", (_event, key) => {
 ipcMain.handle("edit:native", (event, command) => {
   if (["copy", "cut", "paste", "undo", "redo", "selectAll"].includes(command)) event.sender[command]();
 });
+ipcMain.handle("ai:sync-caption", (_event, request) => syncCaption(request, { fetchImpl: proxyAwareFetch }));
 ipcMain.handle("ai:translate", (event, request) => translateSubtitles(request, { onProgress: captionProgress(event), fetchImpl: proxyAwareFetch }));
 ipcMain.handle("ai:transcribe", (event, request) => transcribeCloud(request, {
   tempPath: app.getPath("temp"), ffmpegPath: mediaRuntimePath(), onProgress: captionProgress(event), fetchImpl: proxyAwareFetch,

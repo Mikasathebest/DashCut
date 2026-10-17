@@ -164,6 +164,7 @@ declare global {
       saveAiKey(key: string): Promise<{ persisted: boolean }>;
       nativeEdit(command: "copy" | "cut" | "paste" | "undo" | "redo" | "selectAll"): Promise<void>;
       translateSubtitles(request: { config: AiConfig; subtitles: TimedSubtitle[] }): Promise<TimedSubtitle[]>;
+      syncCaption(request: { config: AiConfig; model?: string; source: "zh" | "en"; text: string; before?: string[]; after?: string[] }): Promise<{ text: string }>;
       transcribeCloud(request: { config: AiConfig; clips: Array<{ id: number; path: string }> }): Promise<{
         model: string;
         timing: "estimated";

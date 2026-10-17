@@ -1,8 +1,8 @@
 "use client";
 
-import { CSSProperties, memo, useEffect, useMemo, useRef, useState } from "react";
+import { CSSProperties, KeyboardEvent as ReactKeyboardEvent, memo, useCallback, PointerEvent as ReactPointerEvent, useEffect, useMemo, useRef, useState } from "react";
 import { captionLines, SubtitleMode, SubtitleStyle } from "./captions";
-import { Asset, audioSourceFor, Clip, clipEnd, evaluateVisual, evaluateVolume, Project, renderClips, sourceTimeAt, speedAt, Subtitle, textBaseScale } from "./model";
+import { Asset, audioSourceFor, Clip, clipEnd, evaluateVisual, evaluateVolume, placementAt, Project, renderClips, sourceTimeAt, speedAt, Subtitle, textBaseScale } from "./model";
 import { measureText, renderText } from "./text";
 import { t } from "../i18n";
 
@@ -15,7 +15,9 @@ function rgba(hex: string, percent: number) {
 }
 
 // Mirrors createAss in electron/video-export.cjs: a background box replaces the outline, as libass BorderStyle 3 does.
-function CaptionOverlay({ subtitle, mode, style, scale }: { subtitle: Subtitle; mode: SubtitleMode; style: SubtitleStyle; scale: number }) {
+type CaptionEdit = { id: number; lang: "zh" | "en" };
+
+function CaptionOverlay({ subtitle, mode, style, scale, editing, syncing, onEdit, onCommit }: { subtitle: Subtitle; mode: SubtitleMode; style: SubtitleStyle; scale: number; editing: CaptionEdit | null; syncing?: string[]; onEdit?: (edit: CaptionEdit | null) => void; onCommit?: (lang: "zh" | "en", text: string) => void }) {
   const lines = captionLines(subtitle, mode, style);
   if (!lines.length) return null;
   const boxed = style.backgroundOpacity > 0;
@@ -24,7 +26,25 @@ function CaptionOverlay({ subtitle, mode, style, scale }: { subtitle: Subtitle; 
     {lines.map((line, index) => {
       const primary = index === 0;
       const size = style.fontSize * scale * (primary || mode !== "both" ? 1 : style.enScale / 100);
-      return <span key={line.lang} className={`caption-line${primary ? " primary" : ""}`} style={{
+      const active = editing?.id === subtitle.id && editing.lang === line.lang;
+      const finish = (element: HTMLElement, save: boolean) => {
+        const text = (element.innerText ?? "").replace(/\n+$/, "");
+        onEdit?.(null);
+        if (save && text.trim() && text !== line.text) onCommit?.(line.lang, text);
+      };
+      return <span key={line.lang} className={`caption-line${primary ? " primary" : ""}${onEdit ? " editable" : ""}${active ? " editing" : ""}${syncing?.includes(`${subtitle.id}:${line.lang}`) ? " syncing" : ""}`}
+        title={onEdit && !active ? t("点击编辑字幕") : undefined}
+        contentEditable={active ? "plaintext-only" : undefined} suppressContentEditableWarning spellCheck={false}
+        ref={(element) => { if (active && element && document.activeElement !== element) { element.focus(); const range = document.createRange(); range.selectNodeContents(element); window.getSelection()?.removeAllRanges(); window.getSelection()?.addRange(range); } }}
+        onPointerDown={(event) => { if (!onEdit) return; event.stopPropagation(); if (!active) { event.preventDefault(); onEdit({ id: subtitle.id, lang: line.lang }); } }}
+        onKeyDown={(event: ReactKeyboardEvent<HTMLSpanElement>) => {
+          if (!active) return;
+          event.stopPropagation();
+          if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); event.currentTarget.blur(); }
+          if (event.key === "Escape") { event.preventDefault(); finish(event.currentTarget, false); }
+        }}
+        onBlur={(event) => { if (active) finish(event.currentTarget, true); }}
+        style={{
         color: line.lang === "en" && mode === "both" ? style.enColor : style.color,
         fontSize: `${Math.max(7, size)}px`,
         WebkitTextStroke: boxed ? undefined : `${style.outlineWidth * scale}px ${style.outlineColor}`,
@@ -298,7 +318,26 @@ function GifFrame({ url, sourceTime, style }: { url: string; sourceTime: number;
   return <canvas ref={canvasRef} style={style} />;
 }
 
-const VisualLayer = memo(function VisualLayer({ clip, asset, time, rate, muted, frame, ratio }: LayerProps) {
+/** Where a visual layer sits in the preview frame, in pixels (before rotation). */
+function layerGeometry(clip: Clip, asset: Asset, time: number, frame: { width: number; height: number }, ratio: "16:9" | "9:16", titleBox?: { width: number; height: number }) {
+  const state = evaluateVisual(clip, time);
+  const textBox = titleBox ?? (asset.kind === "text" && clip.text ? measureText(clip.text) : undefined);
+  if (textBox) state.scale *= textBaseScale(textBox.width, textBox.height, ratio);
+  const mediaWidth = textBox ? textBox.width : asset.width;
+  const mediaHeight = textBox ? textBox.height : asset.height;
+  const cropWidth = mediaWidth * clip.crop.w;
+  const cropHeight = mediaHeight * clip.crop.h;
+  const quarter = clip.rotate90 === 90 || clip.rotate90 === 270;
+  const fit = Math.min(frame.width / (quarter ? cropHeight : cropWidth), frame.height / (quarter ? cropWidth : cropHeight)) * state.scale;
+  const width = (quarter ? cropHeight : cropWidth) * fit;
+  const height = (quarter ? cropWidth : cropHeight) * fit;
+  const box = { left: frame.width / 2 + state.x * frame.width - width / 2, top: frame.height / 2 + state.y * frame.height - height / 2, width, height };
+  return { state, mediaWidth, mediaHeight, cropWidth, cropHeight, fit, box };
+}
+
+type Grab = (event: ReactPointerEvent, clip: Clip, mode: "move" | "scale") => void;
+
+const VisualLayer = memo(function VisualLayer({ clip, asset, time, rate, muted, frame, ratio, onGrab }: LayerProps & { onGrab?: Grab }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   useEffect(() => {
     if (videoRef.current) syncMedia(videoRef.current, clip, time, rate, muted);
@@ -310,21 +349,9 @@ const VisualLayer = memo(function VisualLayer({ clip, asset, time, rate, muted, 
     const box = measureText(textStyle);
     return { box, url: renderText(textStyle, (frame.height / 1080) * 2).canvas.toDataURL("image/png") };
   }, [asset.kind, frame.height, textStyle]);
-  const state = evaluateVisual(clip, time);
-  if (title) state.scale *= textBaseScale(title.box.width, title.box.height, ratio);
-  const mediaWidth = title ? title.box.width : asset.width;
-  const mediaHeight = title ? title.box.height : asset.height;
-  const cropWidth = mediaWidth * clip.crop.w;
-  const cropHeight = mediaHeight * clip.crop.h;
-  const quarter = clip.rotate90 === 90 || clip.rotate90 === 270;
-  const fit = Math.min(frame.width / (quarter ? cropHeight : cropWidth), frame.height / (quarter ? cropWidth : cropHeight)) * state.scale;
-  const boxWidth = (quarter ? cropHeight : cropWidth) * fit;
-  const boxHeight = (quarter ? cropWidth : cropHeight) * fit;
+  const { state, mediaWidth, mediaHeight, cropWidth, cropHeight, fit, box } = layerGeometry(clip, asset, time, frame, ratio, title?.box);
   const outer: CSSProperties = {
-    left: frame.width / 2 + state.x * frame.width - boxWidth / 2,
-    top: frame.height / 2 + state.y * frame.height - boxHeight / 2,
-    width: boxWidth,
-    height: boxHeight,
+    ...box,
     opacity: state.opacity,
     transform: `rotate(${state.rotation}deg)`,
     filter: cssFilter(clip, frame.height),
@@ -336,7 +363,7 @@ const VisualLayer = memo(function VisualLayer({ clip, asset, time, rate, muted, 
     transform: `translate(-50%, -50%) rotate(${clip.rotate90}deg) scaleX(${clip.mirror ? -1 : 1})`,
   };
   const media: CSSProperties = { width: mediaWidth * fit, height: mediaHeight * fit, left: -clip.crop.x * mediaWidth * fit, top: -clip.crop.y * mediaHeight * fit };
-  return <div className="preview-layer" style={outer}>
+  return <div className={`preview-layer${onGrab ? " movable" : ""}`} style={outer} onPointerDown={onGrab ? (event) => onGrab(event, clip, "move") : undefined}>
     {(clip.adjust.temperature !== 0 || clip.effects.includes("chroma-key")) && <svg className="svg-defs" aria-hidden="true"><filter id={`fx-${clip.id}`} colorInterpolationFilters="sRGB">
       {clip.adjust.temperature !== 0 && <feColorMatrix type="matrix" values={`${1 + 0.15 * clip.adjust.temperature} 0 0 0 0  0 1 0 0 0  0 0 ${1 - 0.15 * clip.adjust.temperature} 0 0  0 0 0 1 0`} />}
       {clip.effects.includes("chroma-key") && <feColorMatrix type="matrix" values={chromaMatrix(clip.chromaKey.color, clip.chromaKey.similarity)} />}
@@ -373,9 +400,24 @@ type PreviewProps = {
   onImport: () => void;
   /** Playable URLs for separated stem files, keyed by file path. */
   stemUrls?: Map<string, string>;
+  /** Direct manipulation: selected clips get a box with corner handles; captions edit in place. */
+  selection?: string[];
+  onSelectClip?: (clipId: string | null) => void;
+  onPlacement?: (clipId: string, values: { x?: number; y?: number; scale?: number }, key: string) => void;
+  onCaptionChange?: (id: number, lang: "zh" | "en", text: string) => void;
+  /** "id:lang" for caption lines being re-translated. */
+  syncingCaptions?: string[];
+  /** Called when a drag or caption edit starts, so playback can pause. */
+  onInteract?: () => void;
 };
 
-export function Preview({ project, assets, time, rate, muted, ratio, subtitleMode, subtitleStyle, onImport, stemUrls }: PreviewProps) {
+const snapPixels = 6;
+
+export function Preview({ project, assets, time, rate, muted, ratio, subtitleMode, subtitleStyle, onImport, stemUrls, selection = [], syncingCaptions, onSelectClip, onPlacement, onCaptionChange, onInteract }: PreviewProps) {
+  const [captionEdit, setCaptionEdit] = useState<CaptionEdit | null>(null);
+  const [guides, setGuides] = useState({ vertical: false, horizontal: false });
+  // Handlers read the latest props through a ref so memoised layers keep a stable callback.
+  const live = useRef({ time, frame: { width: 640, height: 360 }, onSelectClip, onPlacement, onInteract });
   const frameRef = useRef<HTMLDivElement>(null);
   const [frame, setFrame] = useState({ width: 640, height: 360 });
   useEffect(() => {
@@ -385,6 +427,47 @@ export function Preview({ project, assets, time, rate, muted, ratio, subtitleMod
     observer.observe(element);
     return () => observer.disconnect();
   }, []);
+  useEffect(() => { live.current = { time, frame, onSelectClip, onPlacement, onInteract }; });
+  const grab = useCallback<Grab>((event, clip, mode) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const { time: at, frame: size } = live.current;
+    live.current.onInteract?.();
+    live.current.onSelectClip?.(clip.id);
+    const start = placementAt(clip, at);
+    const drawn = evaluateVisual(clip, at);
+    const bounds = frameRef.current!.getBoundingClientRect();
+    const center = { x: bounds.left + size.width / 2 + drawn.x * size.width, y: bounds.top + size.height / 2 + drawn.y * size.height };
+    const startDistance = Math.max(4, Math.hypot(event.clientX - center.x, event.clientY - center.y));
+    const origin = { x: event.clientX, y: event.clientY };
+    const key = `${clip.id}-place-${Date.now()}`;
+    let moved = false;
+    const move = (next: PointerEvent) => {
+      if (!moved && Math.hypot(next.clientX - origin.x, next.clientY - origin.y) < 3) return;
+      moved = true;
+      if (mode === "scale") {
+        const scale = Math.max(0.05, Math.min(10, start.scale * Math.hypot(next.clientX - center.x, next.clientY - center.y) / startDistance));
+        return live.current.onPlacement?.(clip.id, { scale: Math.round(scale * 1000) / 1000 }, key);
+      }
+      let x = start.x + (next.clientX - origin.x) / size.width;
+      let y = start.y + (next.clientY - origin.y) / size.height;
+      // The layer centre snaps to the frame centre lines; hold Alt to place freely.
+      const snapX = !next.altKey && Math.abs(x * size.width) < snapPixels;
+      const snapY = !next.altKey && Math.abs(y * size.height) < snapPixels;
+      if (snapX) x = 0;
+      if (snapY) y = 0;
+      setGuides({ vertical: snapX, horizontal: snapY });
+      live.current.onPlacement?.(clip.id, { x: Math.round(x * 10000) / 10000, y: Math.round(y * 10000) / 10000 }, key);
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      setGuides({ vertical: false, horizontal: false });
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up, { once: true });
+  }, []);
+  const canPlace = Boolean(onPlacement);
   // Transitions make neighbouring clips overlap, so a track can show more than one clip at once.
   const drawn = useMemo(() => renderClips(project, assets), [assets, project]);
   const active = (trackId: string) => drawn.filter((clip) => clip.trackId === trackId && time >= clip.start && time < clipEnd(clip)).sort((a, b) => a.start - b.start);
@@ -397,8 +480,9 @@ export function Preview({ project, assets, time, rate, muted, ratio, subtitleMod
   };
   const layers = visualTracks.flatMap((track) => active(track.id).flatMap((clip) => {
     const asset = assets.get(clip.assetId);
-    return asset && asset.kind !== "audio" ? [{ clip, asset, muted: muted || track.muted || Boolean(stemAsset(clip, asset)) }] : [];
+    return asset && asset.kind !== "audio" ? [{ clip, asset, muted: muted || track.muted || Boolean(stemAsset(clip, asset)), locked: track.locked }] : [];
   }));
+  const selected = layers.filter((layer) => selection.includes(layer.clip.id) && !layer.locked);
   const stemLayers = visualTracks.flatMap((track) => active(track.id).flatMap((clip) => {
     const asset = assets.get(clip.assetId);
     const stem = asset && stemAsset(clip, asset);
@@ -411,10 +495,21 @@ export function Preview({ project, assets, time, rate, muted, ratio, subtitleMod
   }))];
   const subtitle: Subtitle | undefined = project.subtitles.find((item) => time >= item.start && time < item.end);
   const scale = frame.height / 1080;
-  return <div ref={frameRef} className={`video-frame ratio-${ratio.replace(":", "-")}`}>
-    {layers.map(({ clip, asset, muted: layerMuted }) => <VisualLayer key={clip.id} clip={clip} asset={asset} time={time} rate={rate} muted={layerMuted} frame={frame} ratio={ratio} />)}
+  const editingCaption = captionEdit && subtitle?.id === captionEdit.id ? captionEdit : null;
+  return <div ref={frameRef} className={`video-frame ratio-${ratio.replace(":", "-")}`} onPointerDown={(event) => { if (onSelectClip && event.button === 0 && layers.length) onSelectClip(null); }}>
+    {layers.map(({ clip, asset, muted: layerMuted, locked }) => <VisualLayer key={clip.id} clip={clip} asset={asset} time={time} rate={rate} muted={layerMuted} frame={frame} ratio={ratio} onGrab={locked || !canPlace ? undefined : grab} />)}
+    {canPlace && selected.map(({ clip, asset }) => {
+      const { state, box } = layerGeometry(clip, asset, time, frame, ratio);
+      return <div key={`select-${clip.id}`} className="preview-selection" style={{ ...box, transform: `rotate(${state.rotation}deg)` }}>
+        {(["nw", "ne", "sw", "se"] as const).map((corner) => <i key={corner} className={`preview-handle ${corner}`} title={t("拖动缩放")} onPointerDown={(event) => grab(event, clip, "scale")} />)}
+      </div>;
+    })}
+    {guides.vertical && <i className="preview-guide vertical" />}
+    {guides.horizontal && <i className="preview-guide horizontal" />}
     {audioLayers.map(({ clip, asset, muted: layerMuted }) => <AudioLayer key={`${clip.id}-${asset.url}`} clip={clip} asset={asset} time={time} rate={rate} muted={layerMuted} />)}
     {!project.clips.length && <button className="empty-stage" onClick={onImport}><span>＋</span><strong>{t("导入素材开始创作")}</strong><small>{t("导入后从左侧素材库拖到时间轴")}</small></button>}
-    {subtitle && <CaptionOverlay subtitle={subtitle} mode={subtitleMode} style={subtitleStyle} scale={scale} />}
+    {subtitle && <CaptionOverlay subtitle={subtitle} mode={subtitleMode} style={subtitleStyle} scale={scale} editing={editingCaption} syncing={syncingCaptions}
+      onEdit={onCaptionChange ? (edit) => { if (edit) onInteract?.(); setCaptionEdit(edit); } : undefined}
+      onCommit={(lang, text) => onCaptionChange?.(subtitle.id, lang, text)} />}
   </div>;
 }
